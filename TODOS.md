@@ -22,25 +22,7 @@
 **Cons:** Significant implementation — needs atomic unwind + re-index; adds ~1 DB round-trip per block.
 **Depends on:** None. Can be added to existing indexer loop.
 
-### BNB ingestion idempotency — unique constraints on logs/token_transfers
-**Priority:** P0
-**Why:** The indexer uses `ON CONFLICT DO NOTHING` on log and token_transfer inserts, but neither table has a unique constraint on `(tx_hash, log_index)`. This means replays and retries silently duplicate rows instead of skipping them.
-**Current state:** `packages/db/schema.ts` — `logs` and `tokenTransfers` tables have no unique index. `log-processor.ts` and `token-decoder.ts` use `onConflictDoNothing()` which is a no-op without a conflict target.
-**Fix:** Add `unique('logs_tx_log_idx').on(logs.txHash, logs.logIndex)` and equivalent for `tokenTransfers`. Migration needed.
-**Pros:** Replay-safe indexing; enables crash recovery without data corruption.
-**Cons:** Migration on live DB; slight write overhead per insert.
-**Depends on:** DB migration.
-
 ## Security
-
-### Webhook management authentication
-**Priority:** P1
-**Why:** `GET /api/v1/webhooks?owner=0x...` and `DELETE /api/v1/webhooks/:id?ownerAddress=0x...` rely on `ownerAddress` in the query string with no proof of ownership. Knowing any address (e.g., from etherscan) is enough to enumerate or delete that address's webhooks.
-**Current state:** `apps/web/app/api/v1/webhooks/route.ts` and `webhooks/[id]/route.ts` — ownerAddress is a query param, not authenticated.
-**Fix:** Require a wallet signature on webhook management operations (same approach as the P3 API key ownership item). Or at minimum, require a valid `X-API-Key` whose `ownerAddress` matches the requested address.
-**Pros:** Prevents webhook enumeration and unauthorized deletion.
-**Cons:** Adds friction to webhook management UX; needs wallet-connect or API key requirement.
-**Depends on:** Developer page UX update (can short-circuit with API key requirement).
 
 ### API key ownership verification via wallet signature
 **Priority:** P3
@@ -83,4 +65,12 @@
 **Depends on:** Render Postgres plan decision (may need to upgrade from 25 GB).
 
 ## Completed
+
+### Webhook management authentication
+**Priority:** P1 → **Completed:** v0.1.1.0 (2026-03-23)
+`GET /webhooks` and `DELETE /webhooks/:id` now require `X-API-Key` whose `ownerAddress` matches the requested owner. `requireApiKeyOwner()` helper added to both `apps/web/lib/api-auth.ts` and `apps/ethscan/lib/api-auth.ts`.
+
+### BNB ingestion idempotency — unique constraints on logs/token_transfers
+**Priority:** P0 → **Completed:** v0.1.1.0 (2026-03-23)
+Added `unique('logs_tx_log_unique').on(txHash, logIndex)` and `unique('tt_tx_log_unique').on(txHash, logIndex)` to `packages/db/schema.ts`. `ON CONFLICT DO NOTHING` now functions correctly on replays and crash recovery.
 
