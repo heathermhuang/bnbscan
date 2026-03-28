@@ -1,12 +1,11 @@
 import { NextResponse } from 'next/server'
-import { getDb, schema } from '@bnbscan/db'
+import { db, schema } from '@/lib/db'
 import { desc } from 'drizzle-orm'
 
 export const dynamic = 'force-dynamic'
 
 export async function GET() {
   try {
-    const db = getDb()
     const [latest] = await db
       .select({ number: schema.blocks.number, timestamp: schema.blocks.timestamp })
       .from(schema.blocks)
