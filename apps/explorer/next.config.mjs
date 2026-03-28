@@ -1,6 +1,7 @@
-import { getChainConfig } from '@bnbscan/chain-config'
-
-const chain = getChainConfig(process.env.CHAIN)
+// Chain config can't be imported here (TypeScript package, Next.js 14 config is pure JS).
+// Use CHAIN env var directly for the few values needed at config level.
+const CHAIN = process.env.CHAIN ?? 'bnb'
+const DOMAIN = CHAIN === 'eth' ? 'ethscan.io' : 'bnbscan.com'
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
@@ -24,7 +25,7 @@ const nextConfig = {
       {
         source: '/api/v1/:path*',
         headers: [
-          { key: 'Access-Control-Allow-Origin', value: process.env.NEXT_PUBLIC_PEER_URL ? `https://${chain.domain}, ${process.env.NEXT_PUBLIC_PEER_URL}` : `https://${chain.domain}` },
+          { key: 'Access-Control-Allow-Origin', value: process.env.NEXT_PUBLIC_PEER_URL ? `https://${DOMAIN}, ${process.env.NEXT_PUBLIC_PEER_URL}` : `https://${DOMAIN}` },
           { key: 'Access-Control-Allow-Methods', value: 'GET, POST, DELETE, OPTIONS' },
           { key: 'Access-Control-Allow-Headers', value: 'Content-Type, X-API-Key' },
           { key: 'Access-Control-Max-Age', value: '86400' },
