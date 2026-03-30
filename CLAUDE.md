@@ -9,12 +9,11 @@
 
 ## Architecture
 
-- `apps/web` — Next.js 14, BNBScan frontend + API
-- `apps/ethscan` — Next.js 14, EthScan frontend + API
-- `apps/indexer` — BullMQ indexer for BNB Chain
-- `apps/eth-indexer` — Node.js indexer for Ethereum
+- `apps/explorer` — Unified Next.js 14 frontend (replaces `apps/web` + `apps/ethscan`). CHAIN env var selects chain: `bnb` or `eth`.
+- `apps/indexer` — BullMQ indexer (replaces separate BNB + ETH indexers). CHAIN env var selects chain.
+- `packages/chain-config` — `getChainConfig()` returns chain-specific config (dbEnvVar, labels, features, etc.)
 - `packages/db` — Drizzle ORM schema + Postgres
-- `packages/explorer-core` — Shared utils (rate limiting, formatting)
+- `packages/explorer-core` — Shared utils (rate limiting with Redis, formatting)
 - `packages/ui` — Shared React components
 
 ## Current Work
@@ -24,39 +23,40 @@
 **Last updated:** 2026-03-30
 **Branch:** `main`
 **Version:** 0.1.1.0
-**Status:** P0 + P1 shipped this session
+**Status:** Render deploy fix in progress — builds were failing, root cause found and pushed
 
-### What just shipped
-- **P0 reorg handling** — batch-boundary parent hash validation in both indexers
-  - `apps/indexer/src/reorg-handler.ts` + `apps/eth-indexer/src/reorg-handler.ts`
-  - On mismatch: walks back to fork point (max 64 blocks), deletes orphaned rows by range, resets `lastIndexed`
-- **P1 token holder counts** — live `tokens.holder_count` via `token_balances` table
-  - New `token_balances (token_address, holder_address, balance)` table in both DBs
-  - Both `token-decoder.ts` files now upsert balances and detect zero-crossings to adjust `holder_count`
-  - Replay-safe: only updates when `token_transfers` INSERT actually inserts (RETURNING check)
-- **P1 address rows** — both indexers now write `addresses` (tx_count, first_seen, last_seen)
-  - `block-processor.ts` and `indexBlock()` use RETURNING + unnest batch-upsert
-  - Fixes `generateMetadata` showing "0 transactions", and populates first/last seen on address pages
+### What just shipped (this session)
+- **QA fixes** — reltuples -1 clamp (7 locations), address First Seen fallback, TxTable Pending badge removed
+- **Token page ERC labels** — `apps/explorer/app/token/page.tsx` now shows ERC-20/721/1155 when `CHAIN=eth`
+- **Build fix 1** — `min` import missing in `apps/explorer/app/address/[address]/page.tsx` (commit `98a98b6`)
+- **Build fix 2** — Deleted 22 accidental Finder "copy 2" duplicate files from packages/ and infra/ that were committed to git and breaking Render TypeScript builds (commit `4b3ff98`)
 
-### Uncommitted changes
-- All P0/P1 work above (not yet committed)
-- Duplicate "copy 2" files in packages/ (accidental Finder duplicates, safe to delete)
-- Modified `.claude/launch.json`
+### Deploy status
+- Last push: `4b3ff98` — should trigger auto-deploy on Render for both `ethscan-web` and `bnbscan-web`
+- **FIRST TASK in new session**: Check if deploy succeeded. Run:
+  ```bash
+  RENDER_API_KEY=$(grep -o 'rnd_[^[:space:]]*' .render-api-key)
+  curl -s -H "Authorization: Bearer $RENDER_API_KEY" \
+    "https://api.render.com/v1/services/srv-d70kbdqa214c73ebrtqg/deploys?limit=3" | python3 -c "
+  import sys, json; data = json.load(sys.stdin)
+  for item in data:
+    d = item.get('deploy', item)
+    print(d.get('status'), d.get('commit',{}).get('id','')[:12], d.get('createdAt',''))
+  "
+  ```
+- If still `build_failed`, check the build logs via Render dashboard or trigger another deploy
+- Verify live: `https://ethscan.io/token` should show **ERC-20 Tokens** (not BEP-20)
 
-### What just shipped (this session continued)
-- **P2 Redis rate limiting**: `explorer-core` rate-limit now uses Redis INCR+PEXPIRE sliding window, falls back to in-memory. All 21 callers awaited. `ioredis` added to explorer-core.
-- **P2 Negative caching**: both `rpc-fallback.ts` files have 5-min null cache; both `moralis.ts` files use `NULL_SENTINEL` pattern.
-- **P2 Storage**: zero-balance `token_balances` rows pruned in retention cleanup; functional DATE indexes added to transactions/token_transfers/gas_history for chart queries.
-- **P3 Wallet signature**: `POST /api/v1/keys` requires `signature`+`timestamp`, verified via `ethers.verifyMessage()`. 5-min expiry. Dev page examples updated.
-
-### Next steps
-- Run `pnpm install` to pick up `ioredis` in explorer-core
-- All TODOS.md items now complete — backlog is clear
+### Render service IDs
+- `ethscan-web`: `srv-d70kbdqa214c73ebrtqg` — rootDir: `apps/explorer`, CHAIN=eth
+- `bnbscan-web`: `srv-d70kbmia214c73ebs3ag` — rootDir: `apps/explorer`, CHAIN=bnb
+- `bnbscan-indexer`: `srv-d70kbmia214c73ebs3a0`
+- `eth-indexer`: `srv-d70kbdqa214c73ebrtq0`
+- Render API key: `.render-api-key` (gitignored)
 
 ### Session tips
 - `pnpm install && pnpm dev` to start all apps
 - Schema: `packages/db/schema.ts`
-- See `TODOS.md` for full prioritized backlog
 - Render deploys; Postgres 25GB limit is a constraint
 
 ## Run Commands
