@@ -23,14 +23,15 @@
 **Last updated:** 2026-03-31
 **Branch:** `main`
 **Version:** 0.1.1.0
-**Status:** Both services live on commit `0ee7182`
+**Status:** 11 commits uncommitted on main — needs deploy
 
 ### What just shipped (this session)
-- **Whale Tracker fix** (`3b3cd62`) — now queries `transactions` table for native BNB/ETH transfers instead of `tokenTransfers` (ERC-20/BEP-20 shitcoins)
-- **Build timeout fix** (`0ee7182`) — 5 pages with `revalidate` + DB/RPC calls were timing out during static pre-render on Render build workers; switched to `force-dynamic` on: `charts`, `gas`, `staking`, `validators`, `page` (homepage)
+- **Design audit** — ETH theme changed from indigo to navy blue, emoji stripped from gas/watchlist/search/staking/developer pages, custom 404 page added
+- **QA fixes** — rate-limit tests async (`b1a940d`), 5s timeouts on GoPlus/SpaceID/ENS/CoinGecko (`333b18f`), 8s timeout on charts DB queries (`cce560b`)
+- **Theme sweep** — all hardcoded `text-blue-600`, `bg-yellow-500` buttons replaced with `chainConfig.theme.*` across all pages + components
 
 ### Deploy status
-- Both `ethscan-web` and `bnbscan-web` are **live** on `0ee7182`
+- Both `ethscan-web` and `bnbscan-web` are **live** on `0ee7182` (stale — 11 new commits on main, need deploy)
 - Build logs accessible via Render API: `GET /v1/logs?ownerId=tea-d6roaibuibrs73dteu2g&resource=<serviceId>&type=build&limit=100&direction=backward`
 
 ### Render service IDs
