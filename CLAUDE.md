@@ -20,32 +20,18 @@
 
 > **Update this section at the end of each session before closing.**
 
-**Last updated:** 2026-03-30
+**Last updated:** 2026-03-31
 **Branch:** `main`
 **Version:** 0.1.1.0
-**Status:** Render deploy fix in progress — builds were failing, root cause found and pushed
+**Status:** Both services live on commit `0ee7182`
 
 ### What just shipped (this session)
-- **QA fixes** — reltuples -1 clamp (7 locations), address First Seen fallback, TxTable Pending badge removed
-- **Token page ERC labels** — `apps/explorer/app/token/page.tsx` now shows ERC-20/721/1155 when `CHAIN=eth`
-- **Build fix 1** — `min` import missing in `apps/explorer/app/address/[address]/page.tsx` (commit `98a98b6`)
-- **Build fix 2** — Deleted 22 accidental Finder "copy 2" duplicate files from packages/ and infra/ that were committed to git and breaking Render TypeScript builds (commit `4b3ff98`)
+- **Whale Tracker fix** (`3b3cd62`) — now queries `transactions` table for native BNB/ETH transfers instead of `tokenTransfers` (ERC-20/BEP-20 shitcoins)
+- **Build timeout fix** (`0ee7182`) — 5 pages with `revalidate` + DB/RPC calls were timing out during static pre-render on Render build workers; switched to `force-dynamic` on: `charts`, `gas`, `staking`, `validators`, `page` (homepage)
 
 ### Deploy status
-- Last push: `4b3ff98` — should trigger auto-deploy on Render for both `ethscan-web` and `bnbscan-web`
-- **FIRST TASK in new session**: Check if deploy succeeded. Run:
-  ```bash
-  RENDER_API_KEY=$(grep -o 'rnd_[^[:space:]]*' .render-api-key)
-  curl -s -H "Authorization: Bearer $RENDER_API_KEY" \
-    "https://api.render.com/v1/services/srv-d70kbdqa214c73ebrtqg/deploys?limit=3" | python3 -c "
-  import sys, json; data = json.load(sys.stdin)
-  for item in data:
-    d = item.get('deploy', item)
-    print(d.get('status'), d.get('commit',{}).get('id','')[:12], d.get('createdAt',''))
-  "
-  ```
-- If still `build_failed`, check the build logs via Render dashboard or trigger another deploy
-- Verify live: `https://ethscan.io/token` should show **ERC-20 Tokens** (not BEP-20)
+- Both `ethscan-web` and `bnbscan-web` are **live** on `0ee7182`
+- Build logs accessible via Render API: `GET /v1/logs?ownerId=tea-d6roaibuibrs73dteu2g&resource=<serviceId>&type=build&limit=100&direction=backward`
 
 ### Render service IDs
 - `ethscan-web`: `srv-d70kbdqa214c73ebrtqg` — rootDir: `apps/explorer`, CHAIN=eth
@@ -53,11 +39,13 @@
 - `bnbscan-indexer`: `srv-d70kbmia214c73ebs3a0`
 - `eth-indexer`: `srv-d70kbdqa214c73ebrtq0`
 - Render API key: `.render-api-key` (gitignored)
+- Owner ID: `tea-d6roaibuibrs73dteu2g`
 
 ### Session tips
 - `pnpm install && pnpm dev` to start all apps
 - Schema: `packages/db/schema.ts`
 - Render deploys; Postgres 25GB limit is a constraint
+- Pages with DB/RPC calls must use `force-dynamic` not `revalidate` — build workers can't pre-render pages that make slow external connections
 
 ## Run Commands
 
