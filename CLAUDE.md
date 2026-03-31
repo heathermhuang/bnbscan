@@ -55,3 +55,18 @@ pnpm install
 pnpm dev          # starts all apps via turbo
 pnpm test         # runs vitest
 ```
+
+## Design System
+
+Always read `DESIGN.md` before making any visual or UI decisions.
+All font choices, colors, spacing, and aesthetic direction are defined there.
+Do not deviate without explicit user approval.
+In QA mode, flag any code that doesn't match DESIGN.md.
+
+Key rules from the design system:
+- **Fonts:** Plus Jakarta Sans (UI/labels) + JetBrains Mono (ALL data values — numbers, hashes, balances, not just code)
+- **BNB accent:** `#F3BA2F` official hex; Tailwind `yellow-400` (#FACC15) is the approximation in use
+- **ETH accent:** `#1E3A8A` / Tailwind `blue-900`
+- **Page background:** `#F7F7F5` warm off-white (not pure white)
+- **Links:** `#4B6CB7` blue-gray
+- **Chain accent** appears on: left-border of stat cards, focus rings, active nav, primary buttons
