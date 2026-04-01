@@ -22,20 +22,24 @@
 
 **Last updated:** 2026-04-01
 **Branch:** `main`
-**Version:** 0.1.1.0
-**Status:** All services live and healthy
+**Status:** All 4 services live and healthy — both indexers processing blocks
 
 ### What just shipped (this session)
-- **ETH indexer unblocked** — build was failing since 2026-03-30 due to pnpm 9 vs 10 lockfile specifier format mismatch; fixed by regenerating with pnpm 10.32.1 and adding `--no-frozen-lockfile`
-- **Missing upsertAddresses restored** — function was lost in merge conflict at `fb4bae7`; restored from `254a199`
-- **Type fixes** — bigint schema fields now receive BigInt not `.toString()` (TS2769/TS2322 in block-processor/log-processor)
-- **Array casting** — `upsertAddresses` switched from `unnest(array::text[])` to `VALUES + sql.join`; drizzle passes JS arrays as `record` type, not `text[]`
-- **chain-config build script** — pnpm 10 fails (exit 1) on missing build scripts; added `build: tsc --noEmit`
-- **logo_url migration** — now deployed to ETH indexer; tokens should populate
+- **ETH indexer unblocked** — pnpm 9 vs 10 lockfile specifier mismatch; regenerated with pnpm 10.32.1 + `--no-frozen-lockfile`
+- **upsertAddresses restored** — lost in merge conflict at `fb4bae7`; now uses `VALUES + sql.join` (drizzle arrays are `record`, not `text[]`)
+- **BigInt type fixes** — `gasUsed`, `gasLimit`, `gas` no longer call `.toString()` (Drizzle bigint columns need real BigInt)
+- **chain-config build script** — pnpm 10 exits 1 on missing script; added `build: tsc --noEmit`
+- **CONCURRENTLY sequential indexes** — indexer now builds indexes in background one-at-a-time (Promise.all caused connection exhaustion); `ensureSchema()` returns immediately after "Schema ready"
+- **Startup retry on DB errors** — indexer retries with backoff instead of crash-looping on max_connections; prevents Render restart cascade
+- **DB_POOL_SIZE=3** for both indexers — prevents connection pileup during restart cycles (was default 5)
+
+### Incident: BNB DB connection exhaustion
+- Root cause: multiple rapid deploys + Promise.all launching 22 concurrent index builds = 97 connections (Render basic-1gb max). Required postgres restart via `POST /v1/postgres/dpg-d70kb62a214c73ebro4g-a/restart`
+- BNB postgres ID: `dpg-d70kb62a214c73ebro4g-a`
 
 ### Deploy status
-- All 4 services live on `af9bffe`: ethscan-web, bnbscan-web, eth-indexer, bnbscan-indexer
-- Build logs accessible via Render API: `GET /v1/logs?ownerId=tea-d6roaibuibrs73dteu2g&resource=<serviceId>&type=build&limit=100&direction=backward`
+- BNB: block 89951112+ | ETH: block 24783172+ — both indexers running normally
+- Build logs: `GET /v1/logs?ownerId=tea-d6roaibuibrs73dteu2g&resource=<serviceId>&type=build&limit=100&direction=backward`
 
 ### Render service IDs
 - `ethscan-web`: `srv-d70kbdqa214c73ebrtqg` — rootDir: `apps/explorer`, CHAIN=eth
@@ -48,6 +52,8 @@
 ### Session tips
 - `pnpm install && pnpm dev` to start all apps
 - Schema: `packages/db/schema.ts`
+- Render deploys; BNB DB is basic-1gb (97 max_connections); ETH DB is also basic-1gb
+- Postgres can be restarted via Render API: `POST /v1/postgres/<id>/restart`
 - Render deploys; Postgres 25GB limit is a constraint
 - Pages with DB/RPC calls must use `force-dynamic` not `revalidate` — build workers can't pre-render pages that make slow external connections
 
