@@ -20,18 +20,21 @@
 
 > **Update this section at the end of each session before closing.**
 
-**Last updated:** 2026-03-31
+**Last updated:** 2026-04-01
 **Branch:** `main`
 **Version:** 0.1.1.0
-**Status:** 11 commits uncommitted on main — needs deploy
+**Status:** All services live and healthy
 
 ### What just shipped (this session)
-- **Design audit** — ETH theme changed from indigo to navy blue, emoji stripped from gas/watchlist/search/staking/developer pages, custom 404 page added
-- **QA fixes** — rate-limit tests async (`b1a940d`), 5s timeouts on GoPlus/SpaceID/ENS/CoinGecko (`333b18f`), 8s timeout on charts DB queries (`cce560b`)
-- **Theme sweep** — all hardcoded `text-blue-600`, `bg-yellow-500` buttons replaced with `chainConfig.theme.*` across all pages + components
+- **ETH indexer unblocked** — build was failing since 2026-03-30 due to pnpm 9 vs 10 lockfile specifier format mismatch; fixed by regenerating with pnpm 10.32.1 and adding `--no-frozen-lockfile`
+- **Missing upsertAddresses restored** — function was lost in merge conflict at `fb4bae7`; restored from `254a199`
+- **Type fixes** — bigint schema fields now receive BigInt not `.toString()` (TS2769/TS2322 in block-processor/log-processor)
+- **Array casting** — `upsertAddresses` switched from `unnest(array::text[])` to `VALUES + sql.join`; drizzle passes JS arrays as `record` type, not `text[]`
+- **chain-config build script** — pnpm 10 fails (exit 1) on missing build scripts; added `build: tsc --noEmit`
+- **logo_url migration** — now deployed to ETH indexer; tokens should populate
 
 ### Deploy status
-- Both `ethscan-web` and `bnbscan-web` are **live** on `0ee7182` (stale — 11 new commits on main, need deploy)
+- All 4 services live on `af9bffe`: ethscan-web, bnbscan-web, eth-indexer, bnbscan-indexer
 - Build logs accessible via Render API: `GET /v1/logs?ownerId=tea-d6roaibuibrs73dteu2g&resource=<serviceId>&type=build&limit=100&direction=backward`
 
 ### Render service IDs
