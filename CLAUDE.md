@@ -20,18 +20,19 @@
 
 > **Update this section at the end of each session before closing.**
 
-**Last updated:** 2026-04-01
+**Last updated:** 2026-04-02
 **Branch:** `main`
 **Status:** All 4 services live and healthy — both indexers processing blocks
 
 ### What just shipped (this session)
-- **ETH indexer unblocked** — pnpm 9 vs 10 lockfile specifier mismatch; regenerated with pnpm 10.32.1 + `--no-frozen-lockfile`
-- **upsertAddresses restored** — lost in merge conflict at `fb4bae7`; now uses `VALUES + sql.join` (drizzle arrays are `record`, not `text[]`)
-- **BigInt type fixes** — `gasUsed`, `gasLimit`, `gas` no longer call `.toString()` (Drizzle bigint columns need real BigInt)
-- **chain-config build script** — pnpm 10 exits 1 on missing script; added `build: tsc --noEmit`
-- **CONCURRENTLY sequential indexes** — indexer now builds indexes in background one-at-a-time (Promise.all caused connection exhaustion); `ensureSchema()` returns immediately after "Schema ready"
-- **Startup retry on DB errors** — indexer retries with backoff instead of crash-looping on max_connections; prevents Render restart cascade
-- **DB_POOL_SIZE=3** for both indexers — prevents connection pileup during restart cycles (was default 5)
+- **Fixed web app crash cycle (CRITICAL)** — commit `472c426`: all external fetches in `app/page.tsx` and `tx/[hash]/page.tsx` were missing `AbortSignal.timeout(5000)`. CoinGecko/bscscan/CoinCap/4byte.directory could hang indefinitely. With `force-dynamic` + 10s `AutoRefresh`, hanging renders accumulated until OOM → ~15min crash cycle → 5 leaked DB connections per crash → max_connections hit after ~20 crashes.
+- **Fixed "Total Tokens: ---"** — same commit: switched `count(*)::int` on tokens table to `fetchTableEstimate('tokens')` (reltuples), same as transactions. Full COUNT(*) on 111k+ rows was slow.
+- **Previous session:** sequential index builds, startup retry on DB errors, DB_POOL_SIZE=3 for indexers (see git log for details)
+
+### Remaining known issues
+- **Whales page shows no data**: The query (`transactions.value > 0`) is correct but native BNB/ETH transfers are rare in our indexed blocks — modern DeFi uses WBNB/WETH via token_transfers, not native value. Fix: rewrite whales page to query `token_transfers` for large ERC-20 moves (USDT, WBNB, etc.).
+- **GA CSP violation** (low priority): `analytics.google.com` blocked. CSP only allows `www.google-analytics.com`. Update CSP headers in `next.config.ts`.
+- **DB_POOL_SIZE for web apps**: Not set in render.yaml for bnbscan-web/ethscan-web. Currently defaults to 5. Consider setting to 3 to reduce connection footprint during crash cycles.
 
 ### Incident: BNB DB connection exhaustion
 - Root cause: multiple rapid deploys + Promise.all launching 22 concurrent index builds = 97 connections (Render basic-1gb max). Required postgres restart via `POST /v1/postgres/dpg-d70kb62a214c73ebro4g-a/restart`
