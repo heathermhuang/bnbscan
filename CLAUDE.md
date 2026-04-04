@@ -20,23 +20,26 @@
 
 > **Update this section at the end of each session before closing.**
 
-**Last updated:** 2026-04-03
+**Last updated:** 2026-04-04
 **Branch:** `main`
-**Status:** Full OOM crash fix deployed — waiting to confirm bnbscan stability
+**Status:** Both sites stable on pro plan (2GB). OOM crash-loop resolved.
 
 ### What just shipped (this session)
-- **SEO/AEO audit** — commit `5d741da`: canonical URLs, per-page metadata, JSON-LD (WebSite + SearchAction + Organization), dynamic `robots.ts` replacing static `robots.txt`, CSP fix for GA
-- **revalidate=30 + AutoRefresh 30s** — commit `858e1f2`: replaced `force-dynamic` on homepage with ISR; 150x fewer concurrent renders under load; DB_POOL_SIZE=3 for web services
-- **Moralis timeouts + heap limit** — commit `896c0e0`: `AbortSignal.timeout(10000)` on all 4 Moralis fetches (was missing NFT endpoint); `NODE_OPTIONS=--max-old-space-size=900` for bnbscan-web + ethscan-web to force GC before Render 1GB OOM kill
+- **CSP fix for GA4** — commit `c36d005`: added GA4 domains to connect-src
+- **ISR on all pages** — commits `07f328c`, `9a4acef`: replaced all `force-dynamic` with `revalidate=30` (fast pages) or `revalidate=300` (slow pages). Removed `headers()` call from address page that was forcing dynamic rendering.
+- **Build fix** — commit `165d457`: added `const isBot = false` after removing `headers()` import
+- **Pro plan upgrade** — both bnbscan-web and ethscan-web upgraded from standard (1GB) to pro (2GB) via Render API. NODE_OPTIONS set to `--max-old-space-size=1536`.
+- **render.yaml sync** — updated to reflect pro plan + 1536MB heap limit
 
 ### Remaining known issues
 - **Whales page shows no data**: Modern DeFi uses WBNB/WETH via `token_transfers`, not native `value`. Fix: rewrite whales page to query `token_transfers` for large ERC-20 moves (USDT, WBNB, etc.).
-- **Deploy-overlap OOM**: During Render zero-downtime deploy, old + new Node.js processes overlap for ~60s, doubling memory on 1GB box. `NODE_OPTIONS=--max-old-space-size=900` mitigates but doesn't fully prevent. Upgrade bnbscan-web to 2GB plan ($50/mo) if crashes persist only during deploys.
 - **og:image missing**: No social preview image on any page. Needs static image or dynamic OG image generation.
 - **About/FAQ page missing**: Recommended for AEO (AI citation engines prefer clear factual Q&A).
+- **isBot always false**: Bot detection disabled to enable ISR. Bots now get Moralis-enriched pages (costs API calls). Could re-enable with middleware-based detection if Moralis costs become an issue.
 
-### Incident: BNB DB connection exhaustion
-- Root cause: crash-restart cycle leaking 5 DB connections per crash; 20 crashes = max_connections hit
+### Incident: BNB DB connection exhaustion (resolved)
+- Root cause: OOM crash-restart cycle leaking 5 DB connections per crash; 20 crashes = max_connections hit
+- Resolution: pro plan (2GB) eliminates crash cycle; ISR reduces render pressure
 - BNB postgres ID: `dpg-d70kb62a214c73ebro4g-a` — restart via `POST /v1/postgres/dpg-d70kb62a214c73ebro4g-a/restart`
 
 ### Render service IDs
@@ -54,7 +57,8 @@
 - Render deploys; BNB DB is basic-1gb (97 max_connections); ETH DB is also basic-1gb
 - Postgres can be restarted via Render API: `POST /v1/postgres/<id>/restart`
 - Homepage uses `revalidate=30` (ISR) — do NOT change back to `force-dynamic`
-- Inner pages with live DB/RPC still need `force-dynamic` (can't pre-render slow queries)
+- All pages now use ISR (`revalidate=30` or `revalidate=300`) — do NOT add `force-dynamic` back
+- Both web services are on pro plan (2GB) — do NOT downgrade to standard
 
 ## Run Commands
 
