@@ -20,6 +20,7 @@ const NAV_LINKS = [
   { href: '/api-docs',   label: 'API Docs',          group: 'Developers' },
   { href: '/developer',  label: 'Developer Portal',  group: 'Developers' },
   { href: '/verify',     label: 'Verify Contract',   group: 'Developers' },
+  { href: '/about',      label: 'About & FAQ',       group: 'Info' },
 ]
 
 const DESKTOP_NAV = [
@@ -36,6 +37,7 @@ const DESKTOP_NAV = [
   { href: '/api-docs',   label: 'API' },
   { href: '/developer',  label: 'Dev' },
   { href: '/verify',     label: 'Verify' },
+  { href: '/about',      label: 'About' },
 ]
 
 function BnbLogo() {

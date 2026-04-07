@@ -58,6 +58,7 @@ export function Footer() {
           <Link href="/charts" className="hover:text-gray-200 transition-colors">Charts</Link>
           <Link href="/api-docs" className="hover:text-gray-200 transition-colors">API</Link>
           <Link href="/developer" className="hover:text-gray-200 transition-colors">Developer</Link>
+          <Link href="/about" className="hover:text-gray-200 transition-colors">About</Link>
           <a href="https://mdt.io" target="_blank" rel="noopener noreferrer" className="hover:text-gray-200 transition-colors">MDT Website ↗</a>
           <a href="https://github.com/heathermhuang/bnbscan" target="_blank" rel="noopener noreferrer" className="hover:text-gray-200 transition-colors">GitHub ↗</a>
         </div>
