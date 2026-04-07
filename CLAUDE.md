@@ -20,22 +20,26 @@
 
 > **Update this section at the end of each session before closing.**
 
-**Last updated:** 2026-04-04
+**Last updated:** 2026-04-07
 **Branch:** `main`
-**Status:** Both sites stable on pro plan (2GB). OOM crash-loop resolved.
+**Status:** Both sites stable. Memory fix deployed, DB optimization scripts ready.
 
 ### What just shipped (this session)
-- **CSP fix for GA4** — commit `c36d005`: added GA4 domains to connect-src
-- **ISR on all pages** — commits `07f328c`, `9a4acef`: replaced all `force-dynamic` with `revalidate=30` (fast pages) or `revalidate=300` (slow pages). Removed `headers()` call from address page that was forcing dynamic rendering.
-- **Build fix** — commit `165d457`: added `const isBot = false` after removing `headers()` import
-- **Pro plan upgrade** — both bnbscan-web and ethscan-web upgraded from standard (1GB) to pro (2GB) via Render API. NODE_OPTIONS set to `--max-old-space-size=1536`.
-- **render.yaml sync** — updated to reflect pro plan + 1536MB heap limit
+- **Memory fix** — commit `e679e55`: disabled Next.js fetch data cache (`cache: 'no-store'` on all fetches) — stopped 40MB/min heap growth
+- **DB health metrics** — commit `e961e41`: added DB size, row counts, connection stats to `/api/health`
+- **Health endpoint timeout fix** — commit `4efe1c1`: replaced `pg_database_size()` (slow on 73GB) with `pg_total_relation_size()` on main tables, bumped timeout to 5s
+- **Composite indexes in schema** — commit `4efe1c1`: added `(from_address, timestamp)` and `(to_address, timestamp)` on transactions + token_transfers
+- **DB optimization SQL** — `scripts/db-optimize.sql`: creates indexes CONCURRENTLY, prunes gas_history/logs/dex_trades, VACUUM ANALYZE
+- **Monitor script fix** — commit `fc5eb26`: fixed false positive from HTTP 103 Early Hints
+- **Footer disclaimer** — commit `a021591`: "Not affiliated with" instead of "Powered by"
+- **Full-table scan elimination** — commit `7d24f7f`: address page uses pre-computed addresses.txCount/firstSeen instead of COUNT(*) on 36M rows
 
 ### Remaining known issues
-- **Whales page shows no data**: Modern DeFi uses WBNB/WETH via `token_transfers`, not native `value`. Fix: rewrite whales page to query `token_transfers` for large ERC-20 moves (USDT, WBNB, etc.).
-- **og:image missing**: No social preview image on any page. Needs static image or dynamic OG image generation.
-- **About/FAQ page missing**: Recommended for AEO (AI citation engines prefer clear factual Q&A).
-- **isBot always false**: Bot detection disabled to enable ISR. Bots now get Moralis-enriched pages (costs API calls). Could re-enable with middleware-based detection if Moralis costs become an issue.
+- **DB disk growth**: BNBScan at ~73GB/100GB (73%). Need to run `psql $DATABASE_URL -f scripts/db-optimize.sql` against both DBs to create indexes and prune old data. Requires direct psql access.
+- **Whales page shows no data**: Modern DeFi uses WBNB/WETH via `token_transfers`, not native `value`. Fix: rewrite whales page to query `token_transfers` for large ERC-20 moves.
+- **og:image missing**: No social preview image on any page.
+- **About/FAQ page missing**: Recommended for AEO.
+- **isBot always false**: Bot detection disabled to enable ISR.
 
 ### Incident: BNB DB connection exhaustion (resolved)
 - Root cause: OOM crash-restart cycle leaking 5 DB connections per crash; 20 crashes = max_connections hit
