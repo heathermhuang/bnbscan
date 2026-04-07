@@ -22,21 +22,20 @@
 
 **Last updated:** 2026-04-07
 **Branch:** `main`
-**Status:** Both sites stable. Memory fix deployed, DB optimization scripts ready.
+**Status:** Full QA completed. 7/8 bugs fixed and deployed. Both sites live.
 
 ### What just shipped (this session)
-- **Memory fix** — commit `e679e55`: disabled Next.js fetch data cache (`cache: 'no-store'` on all fetches) — stopped 40MB/min heap growth
-- **DB health metrics** — commit `e961e41`: added DB size, row counts, connection stats to `/api/health`
-- **Health endpoint timeout fix** — commit `4efe1c1`: replaced `pg_database_size()` (slow on 73GB) with `pg_total_relation_size()` on main tables, bumped timeout to 5s
-- **Composite indexes in schema** — commit `4efe1c1`: added `(from_address, timestamp)` and `(to_address, timestamp)` on transactions + token_transfers
-- **DB optimization SQL** — `scripts/db-optimize.sql`: creates indexes CONCURRENTLY, prunes gas_history/logs/dex_trades, VACUUM ANALYZE
-- **Monitor script fix** — commit `fc5eb26`: fixed false positive from HTTP 103 Early Hints
-- **Footer disclaimer** — commit `a021591`: "Not affiliated with" instead of "Powered by"
-- **Full-table scan elimination** — commit `7d24f7f`: address page uses pre-computed addresses.txCount/firstSeen instead of COUNT(*) on 36M rows
+- **Full QA** — Wrote reusable `QA-TEST-PLAN.md` with 24 test case groups, executed against both live sites
+- **BNB DB restart** — Postgres was down, restarted via Render API (fixed stats, blocks, txns, address pages)
+- **Price feed fix** — commit `31f24ef`: 5-source fallback (Binance US → Binance global → CryptoCompare → CoinGecko → CoinCap) on homepage, tx detail, and address pages
+- **Whales page fix** — commit `cfff0aa`: added min value threshold (10 BNB / 1 ETH) + 8s timeout to prevent query timeouts
+- **Gas chart fix** — commit `31f24ef`: queries `blocks.base_fee_per_gas` instead of empty `gas_history` table; BNB shows explanatory message about fixed 3 Gwei
+- **Admin endpoints** — commit `cfff0aa`: DB pruning and index creation endpoints
 
 ### Remaining known issues
-- **DB disk growth**: BNBScan at ~73GB/100GB (73%). Need to run `psql $DATABASE_URL -f scripts/db-optimize.sql` against both DBs to create indexes and prune old data. Requires direct psql access.
-- **Whales page shows no data**: Modern DeFi uses WBNB/WETH via `token_transfers`, not native `value`. Fix: rewrite whales page to query `token_transfers` for large ERC-20 moves.
+- **Validators page empty**: `syncValidators()` not populating data — needs indexer log investigation
+- **Whales page shows no data**: Page loads fast (fixed timeout) but native value transfers > 10 BNB are rare. Modern DeFi uses WBNB/WETH via `token_transfers`. Fix: rewrite to query `token_transfers` for large ERC-20 moves.
+- **DB disk growth**: BNBScan at ~73GB/100GB (73%). Need to run `psql $DATABASE_URL -f scripts/db-optimize.sql` against both DBs.
 - **og:image missing**: No social preview image on any page.
 - **About/FAQ page missing**: Recommended for AEO.
 - **isBot always false**: Bot detection disabled to enable ISR.
