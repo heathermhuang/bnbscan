@@ -21,11 +21,18 @@ export const metadata: Metadata = {
     siteName: `${chainConfig.brandDomain} by MDT`,
     type: 'website',
     url: `https://${chainConfig.domain}`,
+    images: [{
+      url: '/opengraph-image',
+      width: 1200,
+      height: 630,
+      type: 'image/png',
+    }],
   },
   twitter: {
     card: 'summary_large_image',
     title: `${chainConfig.brandDomain} — ${chainConfig.tagline}`,
     description: `An open, independent ${chainConfig.name} explorer maintained by Measurable Data Token (MDT).`,
+    images: ['/opengraph-image'],
   },
   alternates: {
     canonical: '/',
