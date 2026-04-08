@@ -22,23 +22,18 @@
 
 **Last updated:** 2026-04-08
 **Branch:** `main`
-**Status:** Security audit complete. All 3 findings fixed. Next.js 15 + React 19 upgrade shipped. Indexer deadlocks and validator syncer fixed.
+**Status:** All services healthy. OG image + About/FAQ page shipped. DB at ~73GB/100GB — optimize script ready.
 
 ### What just shipped (this session)
-- **Indexer deadlock fix** — `3346701`: sort addresses alphabetically before bulk upsert for consistent lock ordering + retry with backoff
-- **Validator syncer fix** — `3346701`: added consensus→operator address resolution via `getOperatorAddressByConsensusAddress`, logging at every stage
-- **Security: /api/health gated** — `c0865dd`: internals (memory, DB connections, table sizes) now require ADMIN_SECRET bearer token. Public response is just status/latestBlock/lagSeconds
-- **Security: CSP hardened** — `c0865dd`: removed `unsafe-eval` from script-src, added explicit GA/GTM script domains
-- **Security: Next.js 14→15 upgrade** — `98ad00e`: resolves 3 HIGH CVEs (GHSA-h25m-26qc-wcjf, GHSA-9g9p-9gw9-jx7f, GHSA-3v7f-55p6-f55p). React 18→19. All API routes now have explicit `export const dynamic = 'force-dynamic'`.
+- **og:image** — Dynamic OG image via `opengraph-image.tsx` (chain-aware, 1200x630)
+- **About/FAQ page** — `/about` with FAQ structured data (schema.org FAQPage), footer link, sitemap entry
+- **Health check** — Both sites responding (bnbscan.com lag ~150s, ethscan.io lag ~23s)
 
 ### Remaining known issues
-- **Validators page**: Syncer now resolves operator addresses correctly. Check Render logs for `[validator-syncer] Starting sync...` and `Resolved X/N operator addresses` after next deploy.
+- **DB disk growth**: BNB DB at ~73GB/100GB. Run `psql $DATABASE_URL -f scripts/db-optimize.sql` against both DBs.
 - **Whales page may show empty**: Depends on indexed token_transfers data.
-- **DB disk growth**: BNBScan at ~73GB/100GB (73%). Need to run `psql $DATABASE_URL -f scripts/db-optimize.sql` against both DBs.
-- **og:image missing**: No social preview image on any page.
-- **About/FAQ page missing**: Recommended for AEO/trust.
 - **isBot always false**: Bot detection disabled to enable ISR.
-- **Monitor Next.js 15 deploy**: `isrMemoryCacheSize` was removed (deprecated in 15). Watch memory on 2GB pro plan — Next.js 15 has better defaults but monitor first deploy.
+- **www.ethscan.io unverified**: Subdomain custom domain shows `unverified` in Render — apex `ethscan.io` works fine.
 
 ### Incident: BNB DB connection exhaustion (resolved)
 - Root cause: OOM crash-restart cycle leaking 5 DB connections per crash; 20 crashes = max_connections hit
@@ -57,7 +52,7 @@
 ### Session tips
 - `pnpm install && pnpm dev` to start all apps
 - Schema: `packages/db/schema.ts`
-- Render deploys; BNB DB is basic-1gb (97 max_connections); ETH DB is also basic-1gb
+- Render deploys; BNB DB is basic-4gb (100GB disk); ETH DB is also basic-1gb
 - Postgres can be restarted via Render API: `POST /v1/postgres/<id>/restart`
 - Homepage uses `revalidate=30` (ISR) — do NOT change back to `force-dynamic`
 - All pages now use ISR (`revalidate=30` or `revalidate=300`) — do NOT add `force-dynamic` back
