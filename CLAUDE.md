@@ -20,27 +20,25 @@
 
 > **Update this section at the end of each session before closing.**
 
-**Last updated:** 2026-04-07
+**Last updated:** 2026-04-08
 **Branch:** `main`
-**Status:** Validator syncer fixed, whales page rewritten, design review completed. Both sites live.
+**Status:** Security audit complete. All 3 findings fixed. Next.js 15 + React 19 upgrade shipped. Indexer deadlocks and validator syncer fixed.
 
 ### What just shipped (this session)
-- **Validator syncer fix** — commit `6839391`: rewrote to use StakeHub `0x2002` (BEP-294 Fusion) with ValidatorSet `0x1000` fallback. Extended KNOWN_VALIDATORS. Awaiting first hourly sync cycle to populate data.
-- **Whales page rewrite** — commit `6839391`: now queries both native transfers AND token_transfers for WBNB/WETH/USDT/USDC whale moves. Stablecoin threshold $10k, native/wrapped 10 BNB / 1 ETH.
-- **Design review** — 3 CSS fixes pushed:
-  - `7492e49`: H2 headings bumped from text-base to text-lg
-  - `951ff8a`: Footer link touch targets increased (py-2)
-  - `f508c38`: TxTable links use chainConfig.theme.linkText instead of hardcoded blue
-- **Design score**: B overall / A on AI slop. Clean, professional, ship-ready.
+- **Indexer deadlock fix** — `3346701`: sort addresses alphabetically before bulk upsert for consistent lock ordering + retry with backoff
+- **Validator syncer fix** — `3346701`: added consensus→operator address resolution via `getOperatorAddressByConsensusAddress`, logging at every stage
+- **Security: /api/health gated** — `c0865dd`: internals (memory, DB connections, table sizes) now require ADMIN_SECRET bearer token. Public response is just status/latestBlock/lagSeconds
+- **Security: CSP hardened** — `c0865dd`: removed `unsafe-eval` from script-src, added explicit GA/GTM script domains
+- **Security: Next.js 14→15 upgrade** — `98ad00e`: resolves 3 HIGH CVEs (GHSA-h25m-26qc-wcjf, GHSA-9g9p-9gw9-jx7f, GHSA-3v7f-55p6-f55p). React 18→19. All API routes now have explicit `export const dynamic = 'force-dynamic'`.
 
 ### Remaining known issues
-- **Validators page**: Syncer code fixed and deployed. Should populate on next hourly cycle. If still empty, check Render indexer logs for `[validator-syncer]` messages.
-- **Whales page may show empty**: Token transfer query is deployed but depends on indexed token_transfers data. Will populate as indexer catches up.
+- **Validators page**: Syncer now resolves operator addresses correctly. Check Render logs for `[validator-syncer] Starting sync...` and `Resolved X/N operator addresses` after next deploy.
+- **Whales page may show empty**: Depends on indexed token_transfers data.
 - **DB disk growth**: BNBScan at ~73GB/100GB (73%). Need to run `psql $DATABASE_URL -f scripts/db-optimize.sql` against both DBs.
 - **og:image missing**: No social preview image on any page.
 - **About/FAQ page missing**: Recommended for AEO/trust.
 - **isBot always false**: Bot detection disabled to enable ISR.
-- **Design polish (optional)**: Bump H2s further to text-xl, add tabular-nums to number columns.
+- **Monitor Next.js 15 deploy**: `isrMemoryCacheSize` was removed (deprecated in 15). Watch memory on 2GB pro plan — Next.js 15 has better defaults but monitor first deploy.
 
 ### Incident: BNB DB connection exhaustion (resolved)
 - Root cause: OOM crash-restart cycle leaking 5 DB connections per crash; 20 crashes = max_connections hit
