@@ -22,18 +22,25 @@
 
 **Last updated:** 2026-04-08
 **Branch:** `main`
-**Status:** All services healthy. OG image + About/FAQ page shipped. DB at ~73GB/100GB — optimize script ready.
+**Status:** All services healthy. DB disk crisis resolved — 95GB → 23GB after 7-day retention + VACUUM FULL.
 
 ### What just shipped (this session)
-- **og:image** — Dynamic OG image via `opengraph-image.tsx` (chain-aware, 1200x630)
-- **About/FAQ page** — `/about` with FAQ structured data (schema.org FAQPage), footer link, sitemap entry
-- **Health check** — Both sites responding (bnbscan.com lag ~150s, ethscan.io lag ~23s)
+- **7-day data retention** — Retention cleanup now works: direct DELETE WHERE (not slow ctid batching), 6h interval, `RETENTION_DAYS=7` env var on indexer
+- **DB disk reclaimed** — VACUUM FULL shrank DB from 95GB → 23GB on 150GB disk
+- **Dropped 4 redundant indexes** — `tx_from_idx`, `tx_to_idx`, `tt_from_idx`, `tt_to_idx` (composites cover these)
+- **db-prune admin endpoint** — `POST /api/admin/db-prune?days=7&vacuum=full` now covers all tables with error handling
 
 ### Remaining known issues
-- **DB disk growth**: BNB DB at ~73GB/100GB. Run `psql $DATABASE_URL -f scripts/db-optimize.sql` against both DBs.
 - **Whales page may show empty**: Depends on indexed token_transfers data.
 - **isBot always false**: Bot detection disabled to enable ISR.
 - **www.ethscan.io unverified**: Subdomain custom domain shows `unverified` in Render — apex `ethscan.io` works fine.
+- **ETH DB**: May need same retention treatment — check size with health endpoint.
+
+### Incident: BNB DB disk exhaustion (resolved 2026-04-08)
+- Root cause: DB hit 100GB disk limit. Retention cleanup existed but couldn't keep up (5K batch size × 9000+ iterations). Postgres WAL checkpoint failed on recovery → crash loop.
+- Resolution: Disk expanded to 150GB, 7-day retention enforced, VACUUM FULL reclaimed 72GB. Retention now runs every 6h with direct DELETE.
+- To re-run manually: `POST /api/admin/db-prune?days=7` with `Authorization: Bearer <ADMIN_SECRET>`
+- VACUUM FULL (if needed): Set `VACUUM_FULL=1` env var on indexer, restart, then remove env var after completion.
 
 ### Incident: BNB DB connection exhaustion (resolved)
 - Root cause: OOM crash-restart cycle leaking 5 DB connections per crash; 20 crashes = max_connections hit
@@ -52,7 +59,9 @@
 ### Session tips
 - `pnpm install && pnpm dev` to start all apps
 - Schema: `packages/db/schema.ts`
-- Render deploys; BNB DB is basic-4gb (100GB disk); ETH DB is also basic-1gb
+- Render deploys; BNB DB is basic-4gb (150GB disk); ETH DB is also basic-1gb
+- Data retention: 7 days. Indexer `RETENTION_DAYS=7` runs cleanup every 6h. DB should stay ~25-30GB.
+- ADMIN_SECRET for health/prune endpoints: fetch from Render env vars on bnbscan-web
 - Postgres can be restarted via Render API: `POST /v1/postgres/<id>/restart`
 - Homepage uses `revalidate=30` (ISR) — do NOT change back to `force-dynamic`
 - All pages now use ISR (`revalidate=30` or `revalidate=300`) — do NOT add `force-dynamic` back
