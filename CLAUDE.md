@@ -20,14 +20,14 @@
 
 > **Update this section at the end of each session before closing.**
 
-**Last updated:** 2026-04-08
+**Last updated:** 2026-04-09
 **Branch:** `main`
-**Status:** All services healthy. DB disk crisis resolved — 95GB → 23GB after 7-day retention + VACUUM FULL.
+**Status:** DB migration complete. Both DBs downsized from 150GB+105GB to 50GB+50GB. Indexers re-populating from empty schema.
 
 ### What just shipped (this session)
-- **7-day data retention** — Retention cleanup now works: direct DELETE WHERE (not slow ctid batching), 6h interval, `RETENTION_DAYS=7` env var on indexer
-- **DB disk reclaimed** — VACUUM FULL shrank DB from 95GB → 23GB on 150GB disk
-- **Dropped 4 redundant indexes** — `tx_from_idx`, `tx_to_idx`, `tt_from_idx`, `tt_to_idx` (composites cover these)
+- **DB migration** — Created new 50GB DBs for both BNB and ETH, migrated schema, updated all service env vars, deleted old oversized DBs (150GB BNB + 105GB ETH)
+- **ETH retention** — Added `RETENTION_DAYS=7` to ETH indexer (was missing)
+- **Disk autoscaling disabled** — New ETH DB created with autoscaling off
 - **db-prune admin endpoint** — `POST /api/admin/db-prune?days=7&vacuum=full` now covers all tables with error handling
 
 ### Remaining known issues
@@ -45,7 +45,8 @@
 ### Incident: BNB DB connection exhaustion (resolved)
 - Root cause: OOM crash-restart cycle leaking 5 DB connections per crash; 20 crashes = max_connections hit
 - Resolution: pro plan (2GB) eliminates crash cycle; ISR reduces render pressure
-- BNB postgres ID: `dpg-d70kb62a214c73ebro4g-a` — restart via `POST /v1/postgres/dpg-d70kb62a214c73ebro4g-a/restart`
+- BNB postgres ID: `dpg-d7bl0ih17lss73algol0-a` (50GB, basic-4gb, autoscaling off)
+- ETH postgres ID: `dpg-d7bevuh17lss73ahvii0-a` (50GB, basic-1gb, autoscaling off)
 
 ### Render service IDs
 - `ethscan-web`: `srv-d70kbdqa214c73ebrtqg` — rootDir: `apps/explorer`, CHAIN=eth
@@ -59,7 +60,7 @@
 ### Session tips
 - `pnpm install && pnpm dev` to start all apps
 - Schema: `packages/db/schema.ts`
-- Render deploys; BNB DB is basic-4gb (150GB disk); ETH DB is also basic-1gb
+- Render deploys; BNB DB is basic-4gb (50GB disk); ETH DB is basic-1gb (50GB disk)
 - Data retention: 7 days. Indexer `RETENTION_DAYS=7` runs cleanup every 6h. DB should stay ~25-30GB.
 - ADMIN_SECRET for health/prune endpoints: fetch from Render env vars on bnbscan-web
 - Postgres can be restarted via Render API: `POST /v1/postgres/<id>/restart`
