@@ -20,21 +20,20 @@
 
 > **Update this section at the end of each session before closing.**
 
-**Last updated:** 2026-04-09
+**Last updated:** 2026-04-10
 **Branch:** `main`
-**Status:** DB migration complete. Both DBs downsized from 150GB+105GB to 50GB+50GB. Indexers re-populating from empty schema.
+**Status:** Status page live. ETH operational, BNB degraded (lag ~6m, indexer catching up).
 
 ### What just shipped (this session)
-- **DB migration** — Created new 50GB DBs for both BNB and ETH, migrated schema, updated all service env vars, deleted old oversized DBs (150GB BNB + 105GB ETH)
-- **ETH retention** — Added `RETENTION_DAYS=7` to ETH indexer (was missing)
-- **Disk autoscaling disabled** — New ETH DB created with autoscaling off
-- **db-prune admin endpoint** — `POST /api/admin/db-prune?days=7&vacuum=full` now covers all tables with error handling
+- **Status page polish** — Service names show full domains (bnbscan.com, ethscan.io), adaptive timeline scales to available data (min 45m, max 24h), no more empty bar gaps
+- **Footer links** — Added "Status ↗" link to explorer footer (both sites), removed "MDT Website ↗" link
 
 ### Remaining known issues
-- **Whales page may show empty**: Depends on indexed token_transfers data.
-- **isBot always false**: Bot detection disabled to enable ISR.
-- **www.ethscan.io unverified**: Subdomain custom domain shows `unverified` in Render — apex `ethscan.io` works fine.
-- **ETH DB**: May need same retention treatment — check size with health endpoint.
+- **BNB lag ~6m**: Indexer catching up on fresh 50GB DB — should resolve on its own
+- **Whales page may show empty**: Depends on indexed token_transfers data
+- **isBot always false**: Bot detection disabled to enable ISR
+- **www.ethscan.io unverified**: Subdomain custom domain shows `unverified` in Render — apex `ethscan.io` works fine
+- **Free public RPCs**: Currently using publicnode.com (ETH) and binance.org (BNB) — switch back to Chainstack when quota resets
 
 ### Incident: BNB DB disk exhaustion (resolved 2026-04-08)
 - Root cause: DB hit 100GB disk limit. Retention cleanup existed but couldn't keep up (5K batch size × 9000+ iterations). Postgres WAL checkpoint failed on recovery → crash loop.
