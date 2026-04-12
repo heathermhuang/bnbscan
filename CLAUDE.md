@@ -22,11 +22,13 @@
 
 **Last updated:** 2026-04-12
 **Branch:** `main`
-**Status:** Both chains caught up and operational. All 3 sites QA'd — health score 92/100.
+**Status:** Both chains operational. Homepage redesigned with Market Cap + 24H Transactions. Design review completed, 3 fixes shipped.
 
 ### What just shipped (this session)
-- **Full QA of all 3 sites** — Tested status page, bnbscan.com, ethscan.io across 22 pages. Zero console errors, all core pages functional. Report at `.gstack/qa-reports/qa-report-all-sites-2026-04-12.md`.
-- **gstack upgraded to v0.16.3.0** (auto-upgrade enabled)
+- **Homepage Network Overview redesigned** — Replaced "Total Tokens" with "{currency} Market Cap" (3-tier API fallback: CryptoCompare → CoinGecko → CoinCap). Replaced "Total Transactions" with "24H Transactions" from our own DB index.
+- **Market Cap shows 24h % change** — All 4 stat cards now have consistent subtext (time ago, count, % change, % change).
+- **Design review (both sites)** — Design Score B, AI Slop Score A. 3 fixes: search input 44px touch target, global focus-visible a11y outline, Market Cap card subtext.
+- **Full QA of all 3 sites** (earlier) — health score 92/100, zero console errors.
 
 ### QA findings (low severity, deferred)
 - **DEX "Unique Traders" shows 1 when 0 trades** — `GREATEST(1, ...)` in `apps/explorer/app/dex/page.tsx:47`. Cosmetic.
