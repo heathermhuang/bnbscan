@@ -22,10 +22,15 @@
 
 **Last updated:** 2026-04-12
 **Branch:** `main`
-**Status:** Both chains caught up and operational. Status page deployed with fixes.
+**Status:** Both chains caught up and operational. All 3 sites QA'd — health score 92/100.
 
 ### What just shipped (this session)
-- **Status page uptime fix + daily view (0c1e683)** — Uptime metric showed "—" because it depended on `process.uptime()` from admin-authed health endpoint. Now computed from polling history as 24h uptime %. Added 30-day daily history timeline below the 24h view with per-day status aggregation (up to 90 days, in-memory).
+- **Full QA of all 3 sites** — Tested status page, bnbscan.com, ethscan.io across 22 pages. Zero console errors, all core pages functional. Report at `.gstack/qa-reports/qa-report-all-sites-2026-04-12.md`.
+- **gstack upgraded to v0.16.3.0** (auto-upgrade enabled)
+
+### QA findings (low severity, deferred)
+- **DEX "Unique Traders" shows 1 when 0 trades** — `GREATEST(1, ...)` in `apps/explorer/app/dex/page.tsx:47`. Cosmetic.
+- **ISR cold cache skeleton flash** — First visitor after cache expiry sees loading.tsx for 3-5s. Expected Next.js behavior.
 
 ### Remaining known issues
 - **holder_count eventually consistent**: Updated every 5 min via `recomputeHolderCounts` instead of per-block. Token pages may show slightly stale counts during that window — acceptable tradeoff for ~6x ETH throughput gain.
