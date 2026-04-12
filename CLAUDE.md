@@ -20,18 +20,12 @@
 
 > **Update this section at the end of each session before closing.**
 
-**Last updated:** 2026-04-10
+**Last updated:** 2026-04-12
 **Branch:** `main`
-**Status:** Both chains caught up and operational. ETH lag 0 after holder_count refactor, BNB lag 0 after perf rewrite.
+**Status:** Both chains caught up and operational. Status page deployed with fixes.
 
 ### What just shipped (this session)
-- **Indexer perf rewrite (f1ffadf)** — Inlined log/token/dex decoding, batched token_transfers + tx_status updates, pre-filtered logs by topic, concurrency window with Promise.allSettled. BNB went from degraded to lag 0.
-- **unnest→VALUES cast fix (4192257)** — Drizzle sql template serializes JS arrays as `(a,b,c)` record literals, not postgres arrays, so `${arr}::text[]` fails. Replaced all unnest-based batched queries with VALUES clauses.
-- **Parallelize RPC + fix blk/s (8d6f828)** — `getBlock` and `eth_getBlockReceipts` now run concurrently (~800ms savings per block on ETH). Throughput display now tracks actual blocks/elapsed instead of chunk.length/elapsed.
-- **holder_count off hot path (f4cc147)** — THE big ETH unlock. The two-phase CTE in `batchUpdateHolderBalances` (old_state → upsert → aggregate) was the single bottleneck: 1000+ row LEFT JOINs per ETH block caused deadlocks under concurrency and negative scaling past concurrency=4. Now a simple `INSERT ... ON CONFLICT DO UPDATE` and a periodic `recomputeHolderCounts` runs every 5 min via retention scheduler. ETH caught up from ~400 block lag to 0 in ~2 min.
-- **Status page polish** — Service names show full domains (bnbscan.com, ethscan.io), adaptive timeline scales to available data (min 45m, max 24h), no more empty bar gaps
-- **Footer links** — Added "Status ↗" link to explorer footer (both sites), removed "MDT Website ↗" link
-- **README upgrade (ef41f13)** — Added 4 Playwright screenshots, architecture diagram, tech stack table, getting started, env var reference, deployment guide.
+- **Status page uptime fix + daily view (0c1e683)** — Uptime metric showed "—" because it depended on `process.uptime()` from admin-authed health endpoint. Now computed from polling history as 24h uptime %. Added 30-day daily history timeline below the 24h view with per-day status aggregation (up to 90 days, in-memory).
 
 ### Remaining known issues
 - **holder_count eventually consistent**: Updated every 5 min via `recomputeHolderCounts` instead of per-block. Token pages may show slightly stale counts during that window — acceptable tradeoff for ~6x ETH throughput gain.
@@ -58,6 +52,7 @@
 - `bnbscan-web`: `srv-d70kbmia214c73ebs3ag` — rootDir: `apps/explorer`, CHAIN=bnb
 - `bnbscan-indexer`: `srv-d70kbmia214c73ebs3a0`
 - `eth-indexer`: `srv-d70kbdqa214c73ebrtq0`
+- `status-page`: `srv-d7c5t2n7f7vs739cv2f0`
 - Render API key: `.render-api-key` (gitignored)
 - Owner ID: `tea-d6roaibuibrs73dteu2g`
 - Build logs: `GET /v1/logs?ownerId=tea-d6roaibuibrs73dteu2g&resource=<serviceId>&type=build&limit=100&direction=backward`
