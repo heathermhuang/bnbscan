@@ -137,7 +137,7 @@ bnbscan/
 - [ ] **Step 1: Init git + root package.json**
 
 ```bash
-cd /Users/heatherm/Documents/Claude/bnbscan
+cd bnbscan
 git init
 cat > package.json << 'EOF'
 {
@@ -623,7 +623,7 @@ export default {
 - [ ] **Step 5: Install deps + generate migration**
 
 ```bash
-cd /Users/heatherm/Documents/Claude/bnbscan
+cd bnbscan
 pnpm install
 cd packages/db
 DATABASE_URL=postgresql://localhost/bnbscan pnpm generate
@@ -1365,7 +1365,7 @@ git commit -m "feat: add validator syncer, contract verifier, backfill CLI"
 - [ ] **Step 1: Init Next.js app**
 
 ```bash
-cd /Users/heatherm/Documents/Claude/bnbscan
+cd bnbscan
 pnpm create next-app apps/web --typescript --tailwind --app --no-src-dir --import-alias "@/*"
 ```
 

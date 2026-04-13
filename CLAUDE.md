@@ -3,7 +3,7 @@
 ## Project
 
 - Name: BNBScan / EthScan
-- Workspace: `/Users/heatherm/Documents/Claude/bnbscan`
+- Workspace: (local clone root)
 - Version: 0.1.1.0
 - Monorepo: pnpm + Turborepo
 
@@ -51,18 +51,12 @@
 ### Incident: BNB DB connection exhaustion (resolved)
 - Root cause: OOM crash-restart cycle leaking 5 DB connections per crash; 20 crashes = max_connections hit
 - Resolution: pro plan (2GB) eliminates crash cycle; ISR reduces render pressure
-- BNB postgres ID: `dpg-d7bl0ih17lss73algol0-a` (50GB, basic-4gb, autoscaling off)
-- ETH postgres ID: `dpg-d7bevuh17lss73ahvii0-a` (50GB, basic-1gb, autoscaling off)
+- DB specs: BNB = basic-4gb (50GB disk), ETH = basic-1gb (50GB disk)
 
 ### Render service IDs
-- `ethscan-web`: `srv-d70kbdqa214c73ebrtqg` — rootDir: `apps/explorer`, CHAIN=eth
-- `bnbscan-web`: `srv-d70kbmia214c73ebs3ag` — rootDir: `apps/explorer`, CHAIN=bnb
-- `bnbscan-indexer`: `srv-d70kbmia214c73ebs3a0`
-- `eth-indexer`: `srv-d70kbdqa214c73ebrtq0`
-- `status-page`: `srv-d7c5t2n7f7vs739cv2f0`
+- All Render service IDs, DB IDs, and owner ID are in the Render dashboard — do NOT hardcode them in the repo.
 - Render API key: `.render-api-key` (gitignored)
-- Owner ID: `tea-d6roaibuibrs73dteu2g`
-- Build logs: `GET /v1/logs?ownerId=tea-d6roaibuibrs73dteu2g&resource=<serviceId>&type=build&limit=100&direction=backward`
+- Build logs: `GET /v1/logs?ownerId=<OWNER_ID>&resource=<serviceId>&type=build&limit=100&direction=backward`
 
 ### Session tips
 - `pnpm install && pnpm dev` to start all apps
