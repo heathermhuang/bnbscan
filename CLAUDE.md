@@ -58,8 +58,8 @@
 ### Current DB specs (as of 2026-04-14)
 - **Active** `bnbscan-db` (dpg-d7e4b83bc2fs73ec3l9g-a) — basic_1gb, **50GB disk**, created 2026-04-13
 - **Active** `ethscan-db`  (dpg-d7e4b83bc2fs73ec3la0-a) — basic_1gb, **30GB disk**, created 2026-04-13
-- **Orphaned** `bnbscan-db-v2` (dpg-d7bl0ih17lss73algol0-a) — basic_4gb, 100GB. Kept alive but nothing connects to it. Confirm via `grep databaseHost` before deleting.
-- **Orphaned** `ethscan-db-v2` (dpg-d7bevuh17lss73ahvii0-a) — basic_1gb, 50GB. Same.
+- **Suspended** `bnbscan-db-v2` (dpg-d7bl0ih17lss73algol0-a) — basic_4gb, 100GB, suspended 2026-04-14 (not billing). Verified no service/repo reference before suspend. Hard-delete after ~1 week of confidence, or `POST /v1/postgres/<id>/resume` to restore.
+- **Suspended** `ethscan-db-v2` (dpg-d7bevuh17lss73ahvii0-a) — basic_1gb, 50GB, suspended 2026-04-14 (not billing). Same.
 - Steady-state usage per `CLAUDE.md` estimate: BNB ~25-30GB, ETH ~15-20GB at 7d retention.
 - `DB_DISK_GB` env var on each indexer drives the 70%-warn log — update it when resizing.
 
