@@ -20,15 +20,18 @@
 
 > **Update this section at the end of each session before closing.**
 
-**Last updated:** 2026-04-12
+**Last updated:** 2026-04-14
 **Branch:** `main`
-**Status:** Both chains operational. Homepage redesigned with Market Cap + 24H Transactions. Design review completed, 3 fixes shipped.
+**Status:** BNB disk-90% alert resolved. Both DBs right-sized to hold 7d retention.
 
 ### What just shipped (this session)
-- **Homepage Network Overview redesigned** — Replaced "Total Tokens" with "{currency} Market Cap" (3-tier API fallback: CryptoCompare → CoinGecko → CoinCap). Replaced "Total Transactions" with "24H Transactions" from our own DB index.
-- **Market Cap shows 24h % change** — All 4 stat cards now have consistent subtext (time ago, count, % change, % change).
-- **Design review (both sites)** — Design Score B, AI Slop Score A. 3 fixes: search input 44px touch target, global focus-visible a11y outline, Market Cap card subtext.
-- **Full QA of all 3 sites** (earlier) — health score 92/100, zero console errors.
+- **Root-caused the bnbscan-db disk-90% alert** — indexer+web `DATABASE_URL` pointed at a fresh 15GB `bnbscan-db` (basic_1gb, created 2026-04-13 to replace the crashed `bnbscan-db-v2`). Retention was running correctly every 6h but had nothing older than 7d to delete. A 15GB disk cannot hold BNB's ~2.3GB/day × 7d steady-state. The prior `bnbscan-db-v2` (basic_4gb, 100GB) is orphaned — nothing points to it.
+- **Disk expansions via Render API** — `bnbscan-db` 15→**50GB**, `ethscan-db` 15→**30GB**. Sized to fit 7d steady-state + ~60% headroom for WAL/vacuum bloat.
+- **eth-indexer exit 134 (SIGABRT/OOM)** — bumped `NODE_OPTIONS` 768→**1280MB**. Crashes were isolated (1 on 04-13, cluster on 04-11 coupled with DB-v2 outage); each auto-recovered in ~1s.
+- **Retention observability** (`apps/indexer/src/retention-cleanup.ts`) — every run now logs per-table + total DB size, and WARNs at >70% disk-% via new `DB_DISK_GB` env var (set to 50 for BNB, 30 for ETH indexers). No more "Done — 0 rows removed" dead-end lines.
+
+### Previous session (2026-04-12)
+- Homepage redesigned with Market Cap + 24H Transactions. Design Score B, AI Slop Score A. 3 design fixes shipped.
 
 ### QA findings (low severity, deferred)
 - **DEX "Unique Traders" shows 1 when 0 trades** — `GREATEST(1, ...)` in `apps/explorer/app/dex/page.tsx:47`. Cosmetic.
@@ -51,7 +54,14 @@
 ### Incident: BNB DB connection exhaustion (resolved)
 - Root cause: OOM crash-restart cycle leaking 5 DB connections per crash; 20 crashes = max_connections hit
 - Resolution: pro plan (2GB) eliminates crash cycle; ISR reduces render pressure
-- DB specs: BNB = basic-4gb (50GB disk), ETH = basic-1gb (50GB disk)
+
+### Current DB specs (as of 2026-04-14)
+- **Active** `bnbscan-db` (dpg-d7e4b83bc2fs73ec3l9g-a) — basic_1gb, **50GB disk**, created 2026-04-13
+- **Active** `ethscan-db`  (dpg-d7e4b83bc2fs73ec3la0-a) — basic_1gb, **30GB disk**, created 2026-04-13
+- **Orphaned** `bnbscan-db-v2` (dpg-d7bl0ih17lss73algol0-a) — basic_4gb, 100GB. Kept alive but nothing connects to it. Confirm via `grep databaseHost` before deleting.
+- **Orphaned** `ethscan-db-v2` (dpg-d7bevuh17lss73ahvii0-a) — basic_1gb, 50GB. Same.
+- Steady-state usage per `CLAUDE.md` estimate: BNB ~25-30GB, ETH ~15-20GB at 7d retention.
+- `DB_DISK_GB` env var on each indexer drives the 70%-warn log — update it when resizing.
 
 ### Render service IDs
 - All Render service IDs, DB IDs, and owner ID are in the Render dashboard — do NOT hardcode them in the repo.
@@ -61,8 +71,8 @@
 ### Session tips
 - `pnpm install && pnpm dev` to start all apps
 - Schema: `packages/db/schema.ts`
-- Render deploys; BNB DB is basic-4gb (50GB disk); ETH DB is basic-1gb (50GB disk)
-- Data retention: 7 days. Indexer `RETENTION_DAYS=7` runs cleanup every 6h. DB should stay ~25-30GB.
+- Render deploys; BNB DB = basic_1gb/50GB disk; ETH DB = basic_1gb/30GB disk (see "Current DB specs" above)
+- Data retention: 7 days. Indexer `RETENTION_DAYS=7` runs cleanup every 6h. Each run now logs table sizes + disk-% via `DB_DISK_GB` env var (warns at 70%).
 - ADMIN_SECRET for health/prune endpoints: fetch from Render env vars on bnbscan-web
 - Postgres can be restarted via Render API: `POST /v1/postgres/<id>/restart`
 - Homepage uses `revalidate=30` (ISR) — do NOT change back to `force-dynamic`
