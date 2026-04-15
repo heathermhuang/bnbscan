@@ -20,15 +20,20 @@
 
 > **Update this section at the end of each session before closing.**
 
-**Last updated:** 2026-04-14
+**Last updated:** 2026-04-15
 **Branch:** `main`
-**Status:** BNB disk-90% alert resolved. Both DBs right-sized to hold 7d retention.
+**Status:** BNB indexer tuned (pool=8, concurrency=8) + retention shortened to 3d. Disk at 74.8%; stabilization expected from 2026-04-16 01:24 UTC onward as retention begins evicting day-0 data.
 
 ### What just shipped (this session)
-- **Root-caused the bnbscan-db disk-90% alert** — indexer+web `DATABASE_URL` pointed at a fresh 15GB `bnbscan-db` (basic_1gb, created 2026-04-13 to replace the crashed `bnbscan-db-v2`). Retention was running correctly every 6h but had nothing older than 7d to delete. A 15GB disk cannot hold BNB's ~2.3GB/day × 7d steady-state. The prior `bnbscan-db-v2` (basic_4gb, 100GB) is orphaned — nothing points to it.
-- **Disk expansions via Render API** — `bnbscan-db` 15→**50GB**, `ethscan-db` 15→**30GB**. Sized to fit 7d steady-state + ~60% headroom for WAL/vacuum bloat.
-- **eth-indexer exit 134 (SIGABRT/OOM)** — bumped `NODE_OPTIONS` 768→**1280MB**. Crashes were isolated (1 on 04-13, cluster on 04-11 coupled with DB-v2 outage); each auto-recovered in ~1s.
-- **Retention observability** (`apps/indexer/src/retention-cleanup.ts`) — every run now logs per-table + total DB size, and WARNs at >70% disk-% via new `DB_DISK_GB` env var (set to 50 for BNB, 30 for ETH indexers). No more "Done — 0 rows removed" dead-end lines.
+- **Investigated reported site outage** — sites were NOT down. Render access logs show real users getting fast 200s (100-500ms). Observed local curl hang was a throttled path from dev machine to Render edge, not an app issue. Lesson: always cross-check with server-side Render logs before claiming an outage from a local curl.
+- **BNB indexer falling behind** — was at 1.2-2.5 blk/s vs chain's 3 blk/s, lag growing from 800s to 950s+. Bumped `DB_POOL_SIZE` 3→**8** and set `INDEX_CONCURRENCY=8` explicitly on bnbscan-indexer (matches eth-indexer). Pool bump alone insufficient — RPC (`bsc-dataseed1.binance.org`) is the real bottleneck. Chainstack quota resets in ~7 days; revisit then.
+- **Discovered BNB retention math was broken** — actual write rate is ~**15GB/day** (tx table alone), not the ~2.3GB/day estimate in prior handoff. 7d × 15GB = ~105GB, impossible on 50GB disk. Shortened `RETENTION_DAYS` 7→**3** on bnbscan-indexer. Expected steady-state ~45-48GB (90-96% of 50GB) — tight but viable.
+- **Danger window 2026-04-15 13:22 → 2026-04-16 01:24 UTC (~12h)** — no rows are >3d old yet so retention can't evict; disk will grow from 74.8% to ~90% during this window. If disk-alert fires, manual prune: `POST /api/admin/db-prune?days=3` with `Authorization: Bearer <ADMIN_SECRET>`.
+
+### Previous session (2026-04-14)
+- Root-caused bnbscan-db 90% disk alert (indexer pointed at fresh 15GB DB, not the 100GB v2). Disk expansions: bnbscan-db 15→50GB, ethscan-db 15→30GB. Sized for old (underestimated) 2.3GB/day rate — see above for correction.
+- eth-indexer `NODE_OPTIONS` 768→1280MB for occasional SIGABRT.
+- Retention observability shipped in `apps/indexer/src/retention-cleanup.ts` — every run logs per-table sizes and WARNs at >70% via `DB_DISK_GB` env var.
 
 ### Previous session (2026-04-12)
 - Homepage redesigned with Market Cap + 24H Transactions. Design Score B, AI Slop Score A. 3 design fixes shipped.
@@ -39,7 +44,8 @@
 
 ### Remaining known issues
 - **holder_count eventually consistent**: Updated every 5 min via `recomputeHolderCounts` instead of per-block. Token pages may show slightly stale counts during that window — acceptable tradeoff for ~6x ETH throughput gain.
-- **ETH env vars**: `INDEX_CONCURRENCY=8` and `DB_POOL_SIZE=8` set via Render API (previously 3 each). BNB indexer still at pool=3, CONCURRENCY unset (defaults to 8 for BNB, 4 for ETH).
+- **BNB indexer env vars (updated 2026-04-15)**: `DB_POOL_SIZE=8`, `INDEX_CONCURRENCY=8`, `RETENTION_DAYS=3` — matches ETH on pool/concurrency, retention shorter due to higher BNB write rate.
+- **ETH indexer env vars**: `INDEX_CONCURRENCY=8`, `DB_POOL_SIZE=8`, `RETENTION_DAYS=7` (unchanged — ~3GB/day steady-state fits comfortably in 30GB disk).
 - **Whales page may show empty**: Depends on indexed token_transfers data
 - **isBot always false**: Bot detection disabled to enable ISR
 - **www.ethscan.io unverified**: Subdomain custom domain shows `unverified` in Render — apex `ethscan.io` works fine
