@@ -20,15 +20,20 @@
 
 > **Update this section at the end of each session before closing.**
 
-**Last updated:** 2026-04-15
+**Last updated:** 2026-04-16
 **Branch:** `main`
-**Status:** BNB indexer tuned (pool=8, concurrency=8) + retention shortened to 3d. Disk at 74.8%; stabilization expected from 2026-04-16 01:24 UTC onward as retention begins evicting day-0 data.
+**Status:** BNB indexer throughput still ~0.74-0.89 blk/s vs chain's ~2.25 blk/s (BSC post-Maxwell) — lag growing. staticNetwork bug fixed (commit `79012c1`) eliminated 55 err/min but did NOT restore throughput → bottleneck is now almost certainly per-block DB time, not RPC. Needs profiling next session.
 
-### What just shipped (this session)
+### What just shipped (this session — 2026-04-16)
+- **Root-caused + fixed `JsonRpcProvider failed to detect network` noise** — was seeing **55 errors/minute** steady-state after 2-RPC round-robin shipped. ethers v6 re-runs `eth_chainId` detection before every request unless pinned. Commit `79012c1` passes `Network.from(chain.chainId)` as `staticNetwork` to all three provider constructors (`index.ts`, `provider.ts`, `backfill.ts`). **Verified:** 0 detect-network errors in post-deploy window.
+- **Throughput still bottlenecked** — post-fix measurement (2026-04-16 14:30–14:35 UTC): 0.74 blk/s, lag growing +494 blocks in 326s. Pre-fix baseline same day: 0.89 blk/s. Chain rate ~2.25 blk/s. With 8 workers at 0.74 blk/s aggregate, **each worker takes ~10.8s per block** → suggests per-block DB work (5-7 chunked UPSERT phases in `block-processor.ts`) is the real ceiling, not RPC. **Next session: profile a single-block run and find the dominant phase.**
+- **Live indexer config (note CLAUDE.md was stale)**: `BNB_RPC_URL=<dataseed1>,<dataseed3>` (2-RPC round-robin), `DB_POOL_SIZE=12` (not 8), `INDEX_CONCURRENCY=8`, `MAX_LAG_BLOCKS=100000`, `RETENTION_DAYS=3`, `DB_DISK_GB=100`.
+
+### Previous session (2026-04-15)
+- BNB indexer tuned (pool=8→12, concurrency=8) + retention shortened 7d→3d. Disk at 74.8%; stabilization expected from 2026-04-16 01:24 UTC onward as retention begins evicting day-0 data.
 - **Investigated reported site outage** — sites were NOT down. Render access logs show real users getting fast 200s (100-500ms). Observed local curl hang was a throttled path from dev machine to Render edge, not an app issue. Lesson: always cross-check with server-side Render logs before claiming an outage from a local curl.
-- **BNB indexer falling behind** — was at 1.2-2.5 blk/s vs chain's 3 blk/s, lag growing from 800s to 950s+. Bumped `DB_POOL_SIZE` 3→**8** and set `INDEX_CONCURRENCY=8` explicitly on bnbscan-indexer (matches eth-indexer). Pool bump alone insufficient — RPC (`bsc-dataseed1.binance.org`) is the real bottleneck. Chainstack quota resets in ~7 days; revisit then.
-- **Discovered BNB retention math was broken** — actual write rate is ~**15GB/day** (tx table alone), not the ~2.3GB/day estimate in prior handoff. 7d × 15GB = ~105GB, impossible on 50GB disk. Shortened `RETENTION_DAYS` 7→**3** on bnbscan-indexer. Expected steady-state ~45-48GB (90-96% of 50GB) — tight but viable.
-- **Danger window 2026-04-15 13:22 → 2026-04-16 01:24 UTC (~12h)** — no rows are >3d old yet so retention can't evict; disk will grow from 74.8% to ~90% during this window. If disk-alert fires, manual prune: `POST /api/admin/db-prune?days=3` with `Authorization: Bearer <ADMIN_SECRET>`.
+- **Discovered BNB retention math was broken** — actual write rate is ~**15GB/day** (tx table alone), not the ~2.3GB/day estimate in prior handoff. Shortened `RETENTION_DAYS` 7→**3**.
+- Shipped worker-pool pattern (commits `d182d8c`, `286ea9d`) + multi-RPC round-robin (`68a3e6e`) — small throughput lift but not enough to catch BSC tip.
 
 ### Previous session (2026-04-14)
 - Root-caused bnbscan-db 90% disk alert (indexer pointed at fresh 15GB DB, not the 100GB v2). Disk expansions: bnbscan-db 15→50GB, ethscan-db 15→30GB. Sized for old (underestimated) 2.3GB/day rate — see above for correction.
@@ -44,7 +49,7 @@
 
 ### Remaining known issues
 - **holder_count eventually consistent**: Updated every 5 min via `recomputeHolderCounts` instead of per-block. Token pages may show slightly stale counts during that window — acceptable tradeoff for ~6x ETH throughput gain.
-- **BNB indexer env vars (updated 2026-04-15)**: `DB_POOL_SIZE=8`, `INDEX_CONCURRENCY=8`, `RETENTION_DAYS=3` — matches ETH on pool/concurrency, retention shorter due to higher BNB write rate.
+- **BNB indexer env vars (verified live 2026-04-16)**: `DB_POOL_SIZE=12`, `INDEX_CONCURRENCY=8`, `RETENTION_DAYS=3`, `MAX_LAG_BLOCKS=100000`, `BNB_RPC_URL=https://bsc-dataseed1.binance.org/,https://bsc-dataseed3.binance.org/` (2-RPC round-robin), `DB_DISK_GB=100`.
 - **ETH indexer env vars**: `INDEX_CONCURRENCY=8`, `DB_POOL_SIZE=8`, `RETENTION_DAYS=7` (unchanged — ~3GB/day steady-state fits comfortably in 30GB disk).
 - **Whales page may show empty**: Depends on indexed token_transfers data
 - **isBot always false**: Bot detection disabled to enable ISR
