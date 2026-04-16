@@ -20,11 +20,14 @@
 
 > **Update this section at the end of each session before closing.**
 
-**Last updated:** 2026-04-16
+**Last updated:** 2026-04-16 (session 2)
 **Branch:** `main`
-**Status:** BNB indexer throughput still ~0.74-0.89 blk/s vs chain's ~2.25 blk/s (BSC post-Maxwell) — lag growing. staticNetwork bug fixed (commit `79012c1`) eliminated 55 err/min but did NOT restore throughput → bottleneck is now almost certainly per-block DB time, not RPC. Needs profiling next session.
+**Status:** Critical silent-data-loss bug in eth_getBlockReceipts auto-disable path fixed and deployed. BNB indexer throughput still DB-bound at ~0.74-0.89 blk/s vs chain's ~2.25 blk/s — needs per-phase profiling next session (PROFILE_BLOCKS env var shipped in `0df22f2`).
 
-### What just shipped (this session — 2026-04-16)
+### What just shipped (this session — 2026-04-16 session 2)
+- **Fixed silent receipts-pipeline disable after 3 rate-limit failures** (commit `1c3bb92`). The `blockReceiptsSupported` module-level flag in `block-processor.ts` latched to false after 3 consecutive `eth_getBlockReceipts` errors and NEVER re-enabled — dropping `token_transfers`, `dex_trades`, `tx.status/gasUsed`, and holder balance updates for the rest of the process lifetime. The "Per-tx fallback active (HIGH RPC COST)" warning log was misleading — no such fallback exists in `processBlock`. Observed locally during profiling: a 3×429 burst around block 92888107 flipped the flag; subsequent windows processed blocks at 12-20 blk/s (vs 4 blk/s before) because the receipts phase was being skipped entirely. **Fix:** drop the auto-disable, let each failure throw; worker pool at `index.ts:212-216` already catches and retries. Verified by vitest: 4 tests in `block-processor.test.ts` assert the post-fix recovery — the 4th call after 3 simulated 429s returns the expected receipt rows (pre-fix would have silently returned `[]`).
+
+### Previous session (2026-04-16 session 1)
 - **Root-caused + fixed `JsonRpcProvider failed to detect network` noise** — was seeing **55 errors/minute** steady-state after 2-RPC round-robin shipped. ethers v6 re-runs `eth_chainId` detection before every request unless pinned. Commit `79012c1` passes `Network.from(chain.chainId)` as `staticNetwork` to all three provider constructors (`index.ts`, `provider.ts`, `backfill.ts`). **Verified:** 0 detect-network errors in post-deploy window.
 - **Throughput still bottlenecked** — post-fix measurement (2026-04-16 14:30–14:35 UTC): 0.74 blk/s, lag growing +494 blocks in 326s. Pre-fix baseline same day: 0.89 blk/s. Chain rate ~2.25 blk/s. With 8 workers at 0.74 blk/s aggregate, **each worker takes ~10.8s per block** → suggests per-block DB work (5-7 chunked UPSERT phases in `block-processor.ts`) is the real ceiling, not RPC. **Next session: profile a single-block run and find the dominant phase.**
 - **Live indexer config (note CLAUDE.md was stale)**: `BNB_RPC_URL=<dataseed1>,<dataseed3>` (2-RPC round-robin), `DB_POOL_SIZE=12` (not 8), `INDEX_CONCURRENCY=8`, `MAX_LAG_BLOCKS=100000`, `RETENTION_DAYS=3`, `DB_DISK_GB=100`.
