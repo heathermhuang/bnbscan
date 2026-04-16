@@ -61,13 +61,13 @@
 - Root cause: OOM crash-restart cycle leaking 5 DB connections per crash; 20 crashes = max_connections hit
 - Resolution: pro plan (2GB) eliminates crash cycle; ISR reduces render pressure
 
-### Current DB specs (as of 2026-04-14)
-- **Active** `bnbscan-db` (dpg-d7e4b83bc2fs73ec3l9g-a) — basic_1gb, **50GB disk**, created 2026-04-13
+### Current DB specs (as of 2026-04-16)
+- **Active** `bnbscan-db` (dpg-d7e4b83bc2fs73ec3l9g-a) — **basic_4gb**, **100GB disk**, created 2026-04-13. Upgraded from basic_1gb on 2026-04-16 to permanently fix query timeouts under indexer load.
 - **Active** `ethscan-db`  (dpg-d7e4b83bc2fs73ec3la0-a) — basic_1gb, **30GB disk**, created 2026-04-13
-- **Suspended** `bnbscan-db-v2` (dpg-d7bl0ih17lss73algol0-a) — basic_4gb, 100GB, suspended 2026-04-14 (not billing). Verified no service/repo reference before suspend. Hard-delete after ~1 week of confidence, or `POST /v1/postgres/<id>/resume` to restore.
+- **Suspended** `bnbscan-db-v2` (dpg-d7bl0ih17lss73algol0-a) — basic_4gb, 100GB, suspended 2026-04-14 (not billing). Hard-delete after ~1 week of confidence.
 - **Suspended** `ethscan-db-v2` (dpg-d7bevuh17lss73ahvii0-a) — basic_1gb, 50GB, suspended 2026-04-14 (not billing). Same.
-- Steady-state usage per `CLAUDE.md` estimate: BNB ~25-30GB, ETH ~15-20GB at 7d retention.
-- `DB_DISK_GB` env var on each indexer drives the 70%-warn log — update it when resizing.
+- Steady-state: BNB ~45GB at 3d retention (~15GB/day), ETH ~12GB at 7d retention (~3GB/day).
+- `DB_DISK_GB` env var on each indexer drives the 70%-warn log — BNB=100, ETH=30.
 
 ### Render service IDs
 - All Render service IDs, DB IDs, and owner ID are in the Render dashboard — do NOT hardcode them in the repo.
