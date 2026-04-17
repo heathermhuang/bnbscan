@@ -20,11 +20,15 @@
 
 > **Update this section at the end of each session before closing.**
 
-**Last updated:** 2026-04-16 (session 2)
-**Branch:** `main`
-**Status:** Critical silent-data-loss bug in eth_getBlockReceipts auto-disable path fixed and deployed. BNB indexer throughput still DB-bound at ~0.74-0.89 blk/s vs chain's ~2.25 blk/s — needs per-phase profiling next session (PROFILE_BLOCKS env var shipped in `0df22f2`).
+**Last updated:** 2026-04-17
+**Branch:** `main` (1 commit ahead of origin — `ee00dcd` not yet pushed)
+**Status:** Live /status page shipped. Post-receipts-fix throughput measured on /status: **2.11-2.26 blk/s vs chain ~2.23 blk/s = at tip**. The previously-feared DB-bound bottleneck appears to have been a symptom of the receipts auto-disable bug (`1c3bb92`), not per-block DB work. Profiling work in `0df22f2` may no longer be needed.
 
-### What just shipped (this session — 2026-04-16 session 2)
+### What just shipped (this session — 2026-04-17)
+- **Live /status page** (commit `ee00dcd`) — `/api/status` returns indexed tip + chain tip; `StatusDashboard` client polls every 3s, keeps a 60s rolling window, computes indexer rate / chain rate / block lag / catch-up ETA. Replaces external status page link in footer. Verified in local dev: 2.11 blk/s indexer vs 2.23 blk/s chain, 6-block lag, "At tip" trend.
+- **Fixed CSP blocking Next.js dev HMR** — the production CSP in `next.config.mjs` forbade `'unsafe-eval'`, which broke the webpack `eval-source-map` devtool in dev. Webpack runtime never booted (chunks queued in `webpackChunk_N_E` but `_N_E` undefined). Gated `'unsafe-eval'` on `NODE_ENV=development`. Production CSP is unchanged. **If you ever see `/status` (or any client component) fail to hydrate silently in dev, suspect CSP first.**
+
+### Previous session (2026-04-16 session 2)
 - **Fixed silent receipts-pipeline disable after 3 rate-limit failures** (commit `1c3bb92`). The `blockReceiptsSupported` module-level flag in `block-processor.ts` latched to false after 3 consecutive `eth_getBlockReceipts` errors and NEVER re-enabled — dropping `token_transfers`, `dex_trades`, `tx.status/gasUsed`, and holder balance updates for the rest of the process lifetime. The "Per-tx fallback active (HIGH RPC COST)" warning log was misleading — no such fallback exists in `processBlock`. Observed locally during profiling: a 3×429 burst around block 92888107 flipped the flag; subsequent windows processed blocks at 12-20 blk/s (vs 4 blk/s before) because the receipts phase was being skipped entirely. **Fix:** drop the auto-disable, let each failure throw; worker pool at `index.ts:212-216` already catches and retries. Verified by vitest: 4 tests in `block-processor.test.ts` assert the post-fix recovery — the 4th call after 3 simulated 429s returns the expected receipt rows (pre-fix would have silently returned `[]`).
 
 ### Previous session (2026-04-16 session 1)
