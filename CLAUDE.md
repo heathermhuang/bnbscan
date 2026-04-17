@@ -20,11 +20,33 @@
 
 > **Update this section at the end of each session before closing.**
 
-**Last updated:** 2026-04-17 (session 2)
+**Last updated:** 2026-04-17 (session 3)
 **Branch:** `main` (pushed, clean)
-**Status:** BNBScan was 39k blocks behind chain tip. Shipped 3 perf fixes: async holder-balance queue, merged-batch coalescing, and deferred startup retention. All live on Render as of ~06:50 UTC. Indexer should now catch up without re-starving itself on every restart.
+**Status:** bnbscan.com is LIVE and near-tip. After earlier perf work failed to close the 40k-block gap, jumped the cursor forward via `MAX_LAG_BLOCKS` auto-skip. Indexer now ~280 blocks behind tip, homepage shows block 93018699 at 07:08 UTC. ~40k blocks of history (92978800–93018666) are **intentionally unindexed** — tradeoff accepted to ship a functional site.
 
-### What just shipped (this session — 2026-04-17 session 2)
+### What just shipped (this session — 2026-04-17 session 3)
+- **Jumped cursor past uncatchable 40k backlog.** Prior sessions tuned per-block throughput but we could only MATCH tip (~2.2 blk/s), never CLOSE the gap. User said "just make the site work."
+- **Fix: lower `MAX_LAG_BLOCKS` 100000 → 30000** on bnbscan-indexer service. The auto-skip at [index.ts:140-142](apps/indexer/src/index.ts:140) has always existed — it sets `lastIndexed = latest - 200` when lag exceeds MAX_LAG. Was never triggering because 100000 was too high for a 40k lag. Lowering to 30000 made it fire on startup.
+- **Verified live:** log at 07:07:12 UTC — `40072 blocks behind (>30000) — skipping to block 93018667`. By 07:09:33, indexing blocks 93018827 at 299 lag.
+- **Side commit `1b36a0b`** — added `MIN_START_BLOCK` env support in `block-indexer.ts`. DEAD CODE — that function isn't the live cursor path (`index.ts` line 111-121 is). Harmless; leave it.
+
+### Key takeaway
+**The live resume cursor is in [apps/indexer/src/index.ts:111-121](apps/indexer/src/index.ts:111), NOT block-indexer.ts.** Two cursor-tracking codepaths exist; only index.ts runs in prod. Don't waste time editing block-indexer.ts for indexer-cursor behavior.
+
+### Live env state (bnbscan-indexer, verified 07:05 UTC)
+- `MAX_LAG_BLOCKS=30000` (was 100000)
+- `MIN_START_BLOCK` — deleted
+- All other env unchanged (see prior sessions)
+
+### Next session — what to check first
+1. **Is the lag holding?** At session end, lag was 280-300 blocks and slightly drifting (indexer 1.6 blk/s, chain 3.1 blk/s in that 25s window — but short samples are noisy). If lag grows back past 30k, MAX_LAG_BLOCKS will auto-skip again, but users see "latest block 5hrs ago" between skips. Long-term fix is the pre-existing bottleneck: per-block DB work + holder-queue drain.
+2. **Historical gap 92978800-93018666** — ~40k blocks intentionally skipped. If any critical thing (e.g. analytics) needs backfill, use `FORCE_START_BLOCK` env to re-run a range. Otherwise retention will evict this gap-period eventually.
+3. **Indexer still drops "eth_call in batch triggered rate limit"** on publicnode endpoints. Not blocking — jobs retry. If errors spike, rotate RPC or cut INDEX_CONCURRENCY.
+
+### Why the previous 3 perf fixes still matter
+They got us from 0.74 blk/s → ~2.2 blk/s steady-state. Without them the indexer would STILL be falling behind after the skip. The skip is the shortcut; the perf fixes keep us there.
+
+### Previous session (2026-04-17 session 2)
 - **`669fec9` async holder-balance queue** — `batchUpdateHolderBalances` was ~38% of per-block time. Now `enqueueHolderBalanceUpdate` pushes rows to a module-level queue; a single worker drains it. Removes cross-worker row-lock contention on hot rows (USDT/WBNB/USDC). Block workers no longer await holder UPSERTs.
 - **`5315176` coalesced drain** — the initial drainer pulled one batch per UPSERT round-trip, so it couldn't keep up with enqueue rate. Replaced `shift()` with `splice(0, length)` and concatenate before calling `batchUpdateHolderBalances`. Delta aggregation is commutative — N batches merge into one UPSERT. Bounds memory growth even when DB is slow.
 - **`cb349ba` deferred startup retention** — `startRetentionCleanup()` used to `await runCleanup()` on startup. With 3-day retention on a 15GB/day DB, the resulting DELETE saturated the 12-connection pool for 30+ min, starving the holder-queue drainer (observed 85→508 batches in ~8min). Now deferred by **15 minutes** via `setTimeout`, so block workers get a warm pool to catch up. The 6h `setInterval` still runs on schedule. Crash-restart loops still get a retention pass within 15 min — disk stays bounded.
