@@ -20,9 +20,52 @@
 
 > **Update this section at the end of each session before closing.**
 
-**Last updated:** 2026-04-17 (session 3 final)
-**Branch:** `main` (pushed, clean, through commit `c642193`)
-**Status:** ALL GREEN. bnbscan.com fully responsive: homepage 0.8s, /blocks 0.73s, /txs 0.45s. Indexer healthy at 2.27 blk/s, lag shrinking (-16 over 6 min), zero holder-queue activity. Final fix: **hardcoded SKIP_HOLDER_BALANCES** in block-processor.ts — stopped the write storm that was choking the DB.
+**Last updated:** 2026-04-17 (session 4 final)
+**Branch:** `main` (pushed, clean, through commit `e0a3098`)
+**Status:** ALL GREEN. bnbscan.com responsive: home 0.30s, /blocks 0.29s, /txs 0.81s. Indexer at tip (lag ~160 blocks ≈ 4 min stale, was 7162 / 54 min). **Two real fixes shipped this session:** (1) retention rowCount bug fixed in `e0a3098` — driver was postgres-js (`.count`), code read `.rowCount` → always 0 → VACUUM never ran → indexes bloated → /blocks & /txs queries collapsed to 30-60s timeouts. (2) MAX_LAG_BLOCKS lowered 30000 → 5000 + redeploy → auto-skip fired at [index.ts:141](apps/indexer/src/index.ts:141): `8365 blocks behind (>5000) — skipping to block 93060808`.
+
+### Session 4 arc (2026-04-17)
+
+**Start state:** Handoff said "ALL GREEN" but site had already regressed. /blocks 47s, /txs 30s, indexer drifting −0.5 blk/s, DB at 76.7% of 100GB, retention logging "Done — 0 rows removed" every cycle.
+
+**Discovery — retention rowCount bug:**
+- `apps/indexer/src/retention-cleanup.ts` and `apps/explorer/app/api/admin/db-prune/route.ts` both read `(result as any).rowCount ?? 0` from drizzle `.execute()` results
+- Project uses `drizzle-orm/postgres-js` driver; its `RowList` exposes affected rows as **`.count`**, not `.rowCount` (verified in `node_modules/postgres/types/index.d.ts:587`)
+- → DELETEs succeeded, row counts logged as 0, `if (totalDeleted > 0) VACUUM ANALYZE` guard never fired
+- → Dead tuples + index bloat accumulated across every retention cycle since the driver was set → /blocks & /txs plans collapsed
+
+**Fix (commit `e0a3098`):** Read `.count` first, fall back to `.rowCount` for forward-compat. 5-line patch across 2 files.
+
+**Verified working:** First post-deploy retention run (11:38 UTC) logged `[retention] transactions: deleted 1178369 rows` + `blocks: deleted 12033 rows` + `Done — 1190402 total rows removed` + ran `VACUUM ANALYZE` across 6 tables. /blocks dropped from 60s → 0.79s *before* VACUUM even finished (planner re-stat).
+
+**Lag recovery:** After fix, indexer still at 7162 blocks behind with only ~+0.05 blk/s net closure — would take ~40h to catch up. User directed "just make it work". Lowered `MAX_LAG_BLOCKS` 30000 → 5000 via Render API + redeploy → auto-skip fired, indexer resumed at tip - 200 with lag=160.
+
+### Final verified state (2026-04-17 ~12:25 UTC)
+- Homepage `/`: 0.30s
+- `/blocks`: 0.29s
+- `/txs`: 0.81s
+- Indexer: at tip (lag 160-266 blocks ≈ 2-4 min stale)
+- DB: 78% of 100GB before VACUUM finished; expected to drop as remaining 5 VACUUM ANALYZE passes complete (token_transfers, logs, dex_trades, gas_history, token_balances still in flight as of session close — `transactions` took 26 min, others are smaller)
+- Live env: `MAX_LAG_BLOCKS=5000`, `SKIP_HOLDER_BALANCES=1` (still ignored — code hardcoded from session 3), retention working properly for first time
+
+### Historical gaps (unindexed)
+- 92978800 - 93018666 (from session 3 40k skip)
+- 93052644 - 93060807 (from session 4 ~8k skip) — **~54 min of data lost**
+- Both are within 3-day retention window; will be evicted naturally
+
+### Next session — priorities
+1. **Watch next retention cycle (6h from ~11:38 = ~17:38 UTC).** Should now run cleanly with correct counts + VACUUM every cycle. Disk should trend down and stabilize ~70%.
+2. **Remaining drag on throughput:** indexer matches chain rate but can't catch up (0.05 blk/s net). Per session 3 handoff, ceiling is per-block DB write phase. Any future interruption will leave a lag that never closes without another skip. **Root-fix options to explore:**
+   - Profile `block-processor.ts` phases; find the dominant UPSERT
+   - Consider raising `INDEX_CONCURRENCY` 8 → 12 now that VACUUM will actually run
+   - Consider re-enabling holder_balance writes IF batch strategy is fixed first (don't re-enable without solving the enqueue-vs-drain imbalance — see session 3 notes)
+3. **RPC rate-limits** (minor): 1.1% block-fail rate from BSC public dataseeds hitting eth_call batch limits. Retries handle it; adding 2-3 more RPCs to `BNB_RPC_URL` would give margin.
+4. **Dead code:** commit `1b36a0b` added MIN_START_BLOCK to `block-indexer.ts` which is unused (live cursor is `index.ts:111-121`). Safe to revert/delete.
+
+### Key takeaways (don't re-learn these)
+- **postgres-js `RowList.count`, NOT `.rowCount`.** Drizzle's `.execute()` passes through the driver's result object unchanged. If you ever `(result as any).rowCount` on a postgres-js backend, you'll silently read `undefined` and trigger nothing.
+- **Retention silent failures are deadly.** "Done — 0 rows removed" looked benign for weeks; actually meant VACUUM never ran. Added defense: always log `[retention] sizes:` report regardless of delete count (already in code at line 199).
+- **MAX_LAG_BLOCKS auto-skip is the fastest recovery tool** when the indexer is lost. Set the env before deploy, then POST /deploys. Skip cost = lost data window, but retention window (3d) absorbs it.
 
 ### Full session arc (2026-04-17 session 3)
 
