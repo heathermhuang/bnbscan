@@ -22,30 +22,35 @@
 
 **Last updated:** 2026-04-17 (session 2)
 **Branch:** `main` (pushed, clean)
-**Status:** BNBScan was 39k blocks behind chain tip. Shipped async holder-balance queue (`669fec9`) + merged-batch coalescing (`5315176`). Throughput rose from 1.4 → **1.8-2.0 blk/s** vs chain **~2.1 blk/s**. Remaining gap is NOT block-processor work — it's **retention cleanup saturating the DB on every restart**.
+**Status:** BNBScan was 39k blocks behind chain tip. Shipped 3 perf fixes: async holder-balance queue, merged-batch coalescing, and deferred startup retention. All live on Render as of ~06:50 UTC. Indexer should now catch up without re-starving itself on every restart.
 
 ### What just shipped (this session — 2026-04-17 session 2)
-- **Async holder-balance queue** (`669fec9`) — `batchUpdateHolderBalances` was ~38% of per-block time. Now `enqueueHolderBalanceUpdate` pushes rows to a module-level queue; a single worker drains it. Removes cross-worker row-lock contention on hot rows (USDT/WBNB/USDC). Block workers no longer await holder UPSERTs.
-- **Coalesced drain** (`5315176`) — the initial drainer pulled one batch per UPSERT round-trip, so it couldn't keep up with enqueue rate. Replaced `shift()` with `splice(0, length)` and concatenate before calling `batchUpdateHolderBalances`. Delta aggregation is commutative — N batches merge into one UPSERT. Bounds memory growth even when DB is slow.
+- **`669fec9` async holder-balance queue** — `batchUpdateHolderBalances` was ~38% of per-block time. Now `enqueueHolderBalanceUpdate` pushes rows to a module-level queue; a single worker drains it. Removes cross-worker row-lock contention on hot rows (USDT/WBNB/USDC). Block workers no longer await holder UPSERTs.
+- **`5315176` coalesced drain** — the initial drainer pulled one batch per UPSERT round-trip, so it couldn't keep up with enqueue rate. Replaced `shift()` with `splice(0, length)` and concatenate before calling `batchUpdateHolderBalances`. Delta aggregation is commutative — N batches merge into one UPSERT. Bounds memory growth even when DB is slow.
+- **`cb349ba` deferred startup retention** — `startRetentionCleanup()` used to `await runCleanup()` on startup. With 3-day retention on a 15GB/day DB, the resulting DELETE saturated the 12-connection pool for 30+ min, starving the holder-queue drainer (observed 85→508 batches in ~8min). Now deferred by **15 minutes** via `setTimeout`, so block workers get a warm pool to catch up. The 6h `setInterval` still runs on schedule. Crash-restart loops still get a retention pass within 15 min — disk stays bounded.
 
-### Live unresolved issue (blocking "at tip" status)
-- **Retention cleanup saturates DB on every restart.** `startRetentionCleanup()` awaits `runCleanup()` BEFORE starting the scheduled 6h interval. With 3-day retention on a 15GB/day DB, the startup DELETE is MASSIVE:
-  - 06:37:12 token_transfers DELETE started → 06:45:43 still running (8+ min for ONE table)
-  - 06:45:43 transactions DELETE started → will take even longer
-  - Then logs, blocks, VACUUM ANALYZE on 6 tables → 30+ min total
-- During this window the holder-queue drainer competes for the 12-connection pool and gets starved. Queue grows unboundedly: 8 → 108 → 208 → 308 → 408 → 508 (at +100/~60s).
-- **Three options for next session** (pick one with user):
-  1. **Defer startup retention** — remove `await runCleanup()` from `startRetentionCleanup()`, let only the 6h interval run it. Simple, but you lose the "clean on startup" guarantee.
-  2. **Delay startup retention** — `setTimeout(() => runCleanup(), 5*60_000)` to give the indexer 5 min of clean pool before retention hits.
-  3. **Batch the DELETEs small** — current `deleteAll` does one giant `DELETE FROM tbl WHERE col < cutoff`. Chunk to 50K rows per transaction with 100ms sleep; longer total wall-clock but doesn't hog the pool.
-- My recommendation: **option 1**. Retention runs every 6h anyway. Losing the startup pass is fine — the next interval catches it. Smallest diff, lowest risk.
+### Why 15min-delay instead of pure-remove
+Pure-remove (no startup retention) is cleaner, but if the process crashes every <6h (history of OOM / SIGABRT), retention would never run and disk would fill. 15min delay is the pragmatic middle ground — pool stays hot for the critical catch-up window, and retention still runs once per restart.
 
-### Post-deploy measurement (commit 5315176, 06:37-06:45 UTC)
-- Indexer throughput: 1.79 blk/s (varies 0.58-2.98)
-- Chain rate: 2.27 blk/s
-- Net: -0.48 blk/s (still falling behind until retention finishes)
-- Queue oscillates: drained 182→8 once at 06:40:12, then monotonic growth 8→508 during retention DELETEs
-- Prediction: once retention completes (~07:00 UTC), throughput should jump back to 2.1-2.5 blk/s observed pre-outage
+### Post-deploy measurement (5315176, 06:37-06:45 UTC — BEFORE retention-defer)
+- Indexer: 1.79 blk/s | Chain: 2.27 blk/s | Net: -0.48 blk/s
+- Queue oscillated: drained 182→8 once at 06:40:12, then grew 8→508 while startup retention ran
+- Coalesce fix confirmed working (queue CAN drain in one big cycle), but retention was blocking most cycles
+
+### Next session — what to check first
+1. **Verify cb349ba is actually helping**: Fetch bnbscan-indexer logs from ~06:50 UTC onward (the cb349ba deploy went live ~06:50). Look for:
+   - `[retention] startup cleanup deferred by 15min` message on startup
+   - Block throughput in the first 15 min after restart — should be ≥2.1 blk/s and lag should START DECREASING
+   - Queue depth should stay low (<200) during that window
+2. If lag is decreasing → we're done with the catch-up effort. Leave it indexing.
+3. If still net-negative after 15 min of clean pool → retention isn't the whole story; next suspect is token_balances table bloat. Run `SELECT pg_size_pretty(pg_total_relation_size('token_balances')), pg_size_pretty(pg_indexes_size('token_balances'))` via admin endpoint or Render shell.
+
+### Commands to measure
+```bash
+# Fetch indexer logs (OWNER=tea-d6roaibuibrs73dteu2g, svc=srv-d70kbmia214c73ebs3a0)
+curl -s -H "Authorization: Bearer $RENDER_API_KEY" -H "Accept: application/json" \
+  "https://api.render.com/v1/logs?ownerId=tea-d6roaibuibrs73dteu2g&resource=srv-d70kbmia214c73ebs3a0&limit=200&direction=backward"
+```
 
 ### Previous session (2026-04-17 session 1)
 - **Live /status page** (commit `ee00dcd`) — REVERTED in commit `91f6e90`. Per user: use external `https://status-page-6ez4.onrender.com/` instead. Footer link already points there.
