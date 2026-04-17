@@ -20,31 +20,54 @@
 
 > **Update this section at the end of each session before closing.**
 
-**Last updated:** 2026-04-17 (session 3)
-**Branch:** `main` (pushed, clean)
-**Status:** bnbscan.com is LIVE and near-tip. After earlier perf work failed to close the 40k-block gap, jumped the cursor forward via `MAX_LAG_BLOCKS` auto-skip. Indexer now ~280 blocks behind tip, homepage shows block 93018699 at 07:08 UTC. ~40k blocks of history (92978800–93018666) are **intentionally unindexed** — tradeoff accepted to ship a functional site.
+**Last updated:** 2026-04-17 (session 3 final)
+**Branch:** `main` (pushed, clean, through commit `c642193`)
+**Status:** ALL GREEN. bnbscan.com fully responsive: homepage 0.8s, /blocks 0.73s, /txs 0.45s. Indexer healthy at 2.27 blk/s, lag shrinking (-16 over 6 min), zero holder-queue activity. Final fix: **hardcoded SKIP_HOLDER_BALANCES** in block-processor.ts — stopped the write storm that was choking the DB.
 
-### What just shipped (this session — 2026-04-17 session 3)
-- **Jumped cursor past uncatchable 40k backlog.** Prior sessions tuned per-block throughput but we could only MATCH tip (~2.2 blk/s), never CLOSE the gap. User said "just make the site work."
-- **Fix: lower `MAX_LAG_BLOCKS` 100000 → 30000** on bnbscan-indexer service. The auto-skip at [index.ts:140-142](apps/indexer/src/index.ts:140) has always existed — it sets `lastIndexed = latest - 200` when lag exceeds MAX_LAG. Was never triggering because 100000 was too high for a 40k lag. Lowering to 30000 made it fire on startup.
-- **Verified live:** log at 07:07:12 UTC — `40072 blocks behind (>30000) — skipping to block 93018667`. By 07:09:33, indexing blocks 93018827 at 299 lag.
-- **Side commit `1b36a0b`** — added `MIN_START_BLOCK` env support in `block-indexer.ts`. DEAD CODE — that function isn't the live cursor path (`index.ts` line 111-121 is). Harmless; leave it.
+### Full session arc (2026-04-17 session 3)
 
-### Key takeaway
-**The live resume cursor is in [apps/indexer/src/index.ts:111-121](apps/indexer/src/index.ts:111), NOT block-indexer.ts.** Two cursor-tracking codepaths exist; only index.ts runs in prod. Don't waste time editing block-indexer.ts for indexer-cursor behavior.
+**Phase 1 — Skip the 40k backlog** (commits `1b36a0b` dead-code, env var `MAX_LAG_BLOCKS=30000`)
+- Lowered `MAX_LAG_BLOCKS` 100000 → 30000 → auto-skip at [index.ts:140-142](apps/indexer/src/index.ts:140) fired: `40072 blocks behind (>30000) — skipping to block 93018667`
+- Indexer jumped from 40k lag to <300 in one step.
+- ~40k blocks of history (92978800–93018666) intentionally unindexed — acceptable tradeoff.
+- Side commit `1b36a0b` added MIN_START_BLOCK support in block-indexer.ts. **DEAD CODE — wrong file.** Live cursor is in [index.ts:111-121](apps/indexer/src/index.ts:111).
 
-### Live env state (bnbscan-indexer, verified 07:05 UTC)
-- `MAX_LAG_BLOCKS=30000` (was 100000)
-- `MIN_START_BLOCK` — deleted
-- All other env unchanged (see prior sessions)
+**Phase 2 — Discover the real bottleneck**
+- Post-skip health check: homepage fast, but /blocks and /txs taking 12-19 MINUTES.
+- Root cause: holder-queue depth growing unbounded (472→1072 batches in 6min). The async drainer could NEVER keep up with enqueue rate — each merged UPSERT locked hot `token_balances` rows (USDT/WBNB/USDC) and blocked every other DB query.
+- Indexer lag was also drifting (+1616 blocks in 46 min).
+
+**Phase 3 — The actual fix** (commit `c642193`)
+- Hardcoded `const SKIP_HOLDER_BALANCES = true` in `apps/indexer/src/block-processor.ts`. `enqueueHolderBalanceUpdate` is now a no-op.
+- **Why hardcoded not env-var:** I initially shipped it as `SKIP_HOLDER_BALANCES=1` env var (commit `8d9546f`), and set the var via Render API. Three redeploys later, `process.env.SKIP_HOLDER_BALANCES` was STILL not reaching the running container (verified by `[holder-queue] depth=N batches` logs continuing). Gave up on env propagation and hardcoded. **Do not trust mid-build env var changes on Render — always set BEFORE triggering deploy, or hardcode for urgent fixes.**
+- Also restarted bnbscan-web (srv-d70kbmia214c73ebs3ag) once to flush stuck DB connections that had accumulated during the lock storm.
+
+### Final verified state (2026-04-17 ~10:06 UTC)
+- Homepage `/` : 0.8s
+- `/blocks` : 0.73s (was 45-90s timeout)
+- `/txs` : 0.45s (was 90s timeout)
+- Indexer: 2.27 blk/s avg, lag -16 over 6min (beating chain), zero holder-queue logs
+- Live env: `MAX_LAG_BLOCKS=30000`, `SKIP_HOLDER_BALANCES=1` (set but IGNORED — code is hardcoded)
+- Dead env: `MIN_START_BLOCK` — deleted
+- DB unchanged
+
+### Consequences of hardcoded skip
+- Token "Top holders" pages are FROZEN at their pre-fix state. Balances for any activity from ~09:53 UTC onward are NOT being aggregated.
+- All other data keeps flowing: blocks, transactions, token_transfers, logs, DEX trades, addresses.
+- To re-enable: edit `apps/indexer/src/block-processor.ts` line ~595 — change `const SKIP_HOLDER_BALANCES = true` back to env-based check, commit, deploy. But don't re-enable until the underlying bottleneck (batch UPSERT throughput vs enqueue rate) is solved, or it'll strangle the DB again.
+
+### Key takeaways (don't re-learn these)
+- **Live resume cursor is [index.ts:111-121](apps/indexer/src/index.ts:111), NOT block-indexer.ts.** Two codepaths exist; block-indexer.ts is unused.
+- **Render env vars set via API mid-build DO NOT reliably reach the running container.** Set env BEFORE `POST /deploys`, or hardcode for urgent fixes.
+- **Holder-balance UPSERTs were the strangler.** Drain capacity < enqueue rate → unbounded queue → row-lock contention → whole DB slows. Until the write rate is fundamentally cut (batch size, chunk strategy, or lazy computation), holder writes cannot be re-enabled safely.
 
 ### Next session — what to check first
-1. **Is the lag holding?** At session end, lag was 280-300 blocks and slightly drifting (indexer 1.6 blk/s, chain 3.1 blk/s in that 25s window — but short samples are noisy). If lag grows back past 30k, MAX_LAG_BLOCKS will auto-skip again, but users see "latest block 5hrs ago" between skips. Long-term fix is the pre-existing bottleneck: per-block DB work + holder-queue drain.
-2. **Historical gap 92978800-93018666** — ~40k blocks intentionally skipped. If any critical thing (e.g. analytics) needs backfill, use `FORCE_START_BLOCK` env to re-run a range. Otherwise retention will evict this gap-period eventually.
-3. **Indexer still drops "eth_call in batch triggered rate limit"** on publicnode endpoints. Not blocking — jobs retry. If errors spike, rotate RPC or cut INDEX_CONCURRENCY.
-
-### Why the previous 3 perf fixes still matter
-They got us from 0.74 blk/s → ~2.2 blk/s steady-state. Without them the indexer would STILL be falling behind after the skip. The skip is the shortcut; the perf fixes keep us there.
+1. **Is lag still holding?** Expected near-zero with skip active. If lag grows past 30k again, MAX_LAG_BLOCKS will auto-re-skip.
+2. **Should holder balances be re-enabled?** Requires solving the batch-UPSERT bottleneck FIRST. Options to explore:
+   - Move token_balances to a write-behind log (append-only transfers table) + periodic materialized view.
+   - Batch by token, process one token at a time to reduce lock fan-out.
+   - Cap queue depth at enqueue site (drop oldest) to bound memory + backpressure.
+3. **Historical gap 92978800-93018666** still unindexed. Use `FORCE_START_BLOCK` env to backfill if needed. Retention (3d) will evict eventually.
 
 ### Previous session (2026-04-17 session 2)
 - **`669fec9` async holder-balance queue** — `batchUpdateHolderBalances` was ~38% of per-block time. Now `enqueueHolderBalanceUpdate` pushes rows to a module-level queue; a single worker drains it. Removes cross-worker row-lock contention on hot rows (USDT/WBNB/USDC). Block workers no longer await holder UPSERTs.
