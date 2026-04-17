@@ -20,13 +20,36 @@
 
 > **Update this section at the end of each session before closing.**
 
-**Last updated:** 2026-04-17
-**Branch:** `main` (1 commit ahead of origin — `ee00dcd` not yet pushed)
-**Status:** Live /status page shipped. Post-receipts-fix throughput measured on /status: **2.11-2.26 blk/s vs chain ~2.23 blk/s = at tip**. The previously-feared DB-bound bottleneck appears to have been a symptom of the receipts auto-disable bug (`1c3bb92`), not per-block DB work. Profiling work in `0df22f2` may no longer be needed.
+**Last updated:** 2026-04-17 (session 2)
+**Branch:** `main` (pushed, clean)
+**Status:** BNBScan was 39k blocks behind chain tip. Shipped async holder-balance queue (`669fec9`) + merged-batch coalescing (`5315176`). Throughput rose from 1.4 → **1.8-2.0 blk/s** vs chain **~2.1 blk/s**. Remaining gap is NOT block-processor work — it's **retention cleanup saturating the DB on every restart**.
 
-### What just shipped (this session — 2026-04-17)
-- **Live /status page** (commit `ee00dcd`) — `/api/status` returns indexed tip + chain tip; `StatusDashboard` client polls every 3s, keeps a 60s rolling window, computes indexer rate / chain rate / block lag / catch-up ETA. Replaces external status page link in footer. Verified in local dev: 2.11 blk/s indexer vs 2.23 blk/s chain, 6-block lag, "At tip" trend.
-- **Fixed CSP blocking Next.js dev HMR** — the production CSP in `next.config.mjs` forbade `'unsafe-eval'`, which broke the webpack `eval-source-map` devtool in dev. Webpack runtime never booted (chunks queued in `webpackChunk_N_E` but `_N_E` undefined). Gated `'unsafe-eval'` on `NODE_ENV=development`. Production CSP is unchanged. **If you ever see `/status` (or any client component) fail to hydrate silently in dev, suspect CSP first.**
+### What just shipped (this session — 2026-04-17 session 2)
+- **Async holder-balance queue** (`669fec9`) — `batchUpdateHolderBalances` was ~38% of per-block time. Now `enqueueHolderBalanceUpdate` pushes rows to a module-level queue; a single worker drains it. Removes cross-worker row-lock contention on hot rows (USDT/WBNB/USDC). Block workers no longer await holder UPSERTs.
+- **Coalesced drain** (`5315176`) — the initial drainer pulled one batch per UPSERT round-trip, so it couldn't keep up with enqueue rate. Replaced `shift()` with `splice(0, length)` and concatenate before calling `batchUpdateHolderBalances`. Delta aggregation is commutative — N batches merge into one UPSERT. Bounds memory growth even when DB is slow.
+
+### Live unresolved issue (blocking "at tip" status)
+- **Retention cleanup saturates DB on every restart.** `startRetentionCleanup()` awaits `runCleanup()` BEFORE starting the scheduled 6h interval. With 3-day retention on a 15GB/day DB, the startup DELETE is MASSIVE:
+  - 06:37:12 token_transfers DELETE started → 06:45:43 still running (8+ min for ONE table)
+  - 06:45:43 transactions DELETE started → will take even longer
+  - Then logs, blocks, VACUUM ANALYZE on 6 tables → 30+ min total
+- During this window the holder-queue drainer competes for the 12-connection pool and gets starved. Queue grows unboundedly: 8 → 108 → 208 → 308 → 408 → 508 (at +100/~60s).
+- **Three options for next session** (pick one with user):
+  1. **Defer startup retention** — remove `await runCleanup()` from `startRetentionCleanup()`, let only the 6h interval run it. Simple, but you lose the "clean on startup" guarantee.
+  2. **Delay startup retention** — `setTimeout(() => runCleanup(), 5*60_000)` to give the indexer 5 min of clean pool before retention hits.
+  3. **Batch the DELETEs small** — current `deleteAll` does one giant `DELETE FROM tbl WHERE col < cutoff`. Chunk to 50K rows per transaction with 100ms sleep; longer total wall-clock but doesn't hog the pool.
+- My recommendation: **option 1**. Retention runs every 6h anyway. Losing the startup pass is fine — the next interval catches it. Smallest diff, lowest risk.
+
+### Post-deploy measurement (commit 5315176, 06:37-06:45 UTC)
+- Indexer throughput: 1.79 blk/s (varies 0.58-2.98)
+- Chain rate: 2.27 blk/s
+- Net: -0.48 blk/s (still falling behind until retention finishes)
+- Queue oscillates: drained 182→8 once at 06:40:12, then monotonic growth 8→508 during retention DELETEs
+- Prediction: once retention completes (~07:00 UTC), throughput should jump back to 2.1-2.5 blk/s observed pre-outage
+
+### Previous session (2026-04-17 session 1)
+- **Live /status page** (commit `ee00dcd`) — REVERTED in commit `91f6e90`. Per user: use external `https://status-page-6ez4.onrender.com/` instead. Footer link already points there.
+- **Fixed CSP blocking Next.js dev HMR** — the production CSP in `next.config.mjs` forbade `'unsafe-eval'`, which broke the webpack `eval-source-map` devtool in dev. Gated `'unsafe-eval'` on `NODE_ENV=development`. Production CSP is unchanged. **If you ever see a client component fail to hydrate silently in dev, suspect CSP first.**
 
 ### Previous session (2026-04-16 session 2)
 - **Fixed silent receipts-pipeline disable after 3 rate-limit failures** (commit `1c3bb92`). The `blockReceiptsSupported` module-level flag in `block-processor.ts` latched to false after 3 consecutive `eth_getBlockReceipts` errors and NEVER re-enabled — dropping `token_transfers`, `dex_trades`, `tx.status/gasUsed`, and holder balance updates for the rest of the process lifetime. The "Per-tx fallback active (HIGH RPC COST)" warning log was misleading — no such fallback exists in `processBlock`. Observed locally during profiling: a 3×429 burst around block 92888107 flipped the flag; subsequent windows processed blocks at 12-20 blk/s (vs 4 blk/s before) because the receipts phase was being skipped entirely. **Fix:** drop the auto-disable, let each failure throw; worker pool at `index.ts:212-216` already catches and retries. Verified by vitest: 4 tests in `block-processor.test.ts` assert the post-fix recovery — the 4th call after 3 simulated 429s returns the expected receipt rows (pre-fix would have silently returned `[]`).
