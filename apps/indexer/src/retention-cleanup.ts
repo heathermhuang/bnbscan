@@ -77,15 +77,33 @@ function assertAllowedIdentifier(value: string, kind: 'table' | 'column'): void 
  * If the blocks table is empty or has no block past the cutoff, returns
  * null — caller should skip the delete rather than wipe the table.
  */
-async function cutoffBlockNumber(cutoff: Date): Promise<number | null> {
+async function cutoffBlockNumber(cutoff: Date, days: number): Promise<number | null> {
   const db = getDb()
   const cutoffStr = cutoff.toISOString()
   const result = await db.execute(
     sql`SELECT MIN(number)::bigint AS n FROM blocks WHERE timestamp >= ${cutoffStr}::timestamptz`
   )
   const row = Array.from(result)[0] as Record<string, unknown> | undefined
-  if (!row || row.n === null || row.n === undefined) return null
-  return Number(row.n)
+  if (row && row.n !== null && row.n !== undefined) return Number(row.n)
+
+  // Fallback: indexer is stale — latest indexed block is older than wall-clock
+  // cutoff (e.g. indexer was down > RETENTION_DAYS, or starting from an old
+  // snapshot). Without this, retention becomes a no-op exactly when we need
+  // it most. Anchor the cutoff to MAX(timestamp) - days instead, so we still
+  // keep only the last N days of INDEXED data. Semantics shift from
+  // wall-clock-relative to indexed-data-relative, but retention still makes
+  // progress and disk pressure gets relieved.
+  const rel = await db.execute(
+    sql`SELECT MIN(number)::bigint AS n FROM blocks
+        WHERE timestamp >= (SELECT MAX(timestamp) - (${days} * INTERVAL '1 day') FROM blocks)`
+  )
+  const relRow = Array.from(rel)[0] as Record<string, unknown> | undefined
+  if (!relRow || relRow.n === null || relRow.n === undefined) return null
+  console.warn(
+    `[retention] no blocks past wall-clock cutoff — falling back to ` +
+    `indexed-data-relative cutoff (last ${days}d of indexed blocks)`
+  )
+  return Number(relRow.n)
 }
 
 async function deleteByBlockNumber(table: string, cutoffBlock: number): Promise<number> {
@@ -167,7 +185,7 @@ async function runCleanup(overrideDays?: number): Promise<void> {
   // full-scan DELETE on 32GB token_transfers before this change).
   let cutoffBlock: number | null = null
   try {
-    cutoffBlock = await cutoffBlockNumber(cutoff)
+    cutoffBlock = await cutoffBlockNumber(cutoff, days)
     console.log(`[retention] cutoff block_number = ${cutoffBlock ?? '(none — all blocks older than cutoff)'}`)
   } catch (err) {
     console.error('[retention] cutoffBlockNumber failed:', err instanceof Error ? err.message : err)
@@ -195,20 +213,27 @@ async function runCleanup(overrideDays?: number): Promise<void> {
     console.log('[retention] Skipping block-number deletes — no cutoff block found (blocks table empty or entirely beyond cutoff)')
   }
 
-  // blocks last — only those with no remaining transactions
-  try {
-    const db = getDb()
-    const cutoffStr = cutoff.toISOString()
-    console.log('[retention] Deleting old rows from blocks...')
-    const blockResult = await db.execute(
-      sql`DELETE FROM blocks WHERE timestamp < ${cutoffStr}::timestamptz
-        AND NOT EXISTS (SELECT 1 FROM transactions WHERE block_number = blocks.number)`
-    )
-    const blocksDeleted = (blockResult as any).count ?? (blockResult as any).rowCount ?? 0
-    if (blocksDeleted > 0) console.log(`[retention] blocks: deleted ${blocksDeleted} rows`)
-    totalDeleted += blocksDeleted
-  } catch (err) {
-    console.error('[retention] blocks delete failed:', err instanceof Error ? err.message : err)
+  // blocks last — only those with no remaining transactions. Gate on the
+  // same cutoffBlock we used above so the stale-indexer fallback path stays
+  // consistent: if cutoffBlock is null, skip the blocks delete too (can't
+  // safely derive a cutoff). blocks.number is the PK so `< cutoffBlock` is
+  // trivially indexed.
+  if (cutoffBlock !== null && cutoffBlock > 0) {
+    try {
+      const db = getDb()
+      console.log(`[retention] Deleting old rows from blocks (number < ${cutoffBlock})...`)
+      const blockResult = await db.execute(
+        sql`DELETE FROM blocks WHERE number < ${cutoffBlock}
+          AND NOT EXISTS (SELECT 1 FROM transactions WHERE block_number = blocks.number)`
+      )
+      const blocksDeleted = (blockResult as any).count ?? (blockResult as any).rowCount ?? 0
+      if (blocksDeleted > 0) console.log(`[retention] blocks: deleted ${blocksDeleted} rows`)
+      totalDeleted += blocksDeleted
+    } catch (err) {
+      console.error('[retention] blocks delete failed:', err instanceof Error ? err.message : err)
+    }
+  } else {
+    console.log('[retention] Skipping blocks delete — no cutoff block available')
   }
 
   // Prune zero-balance rows from token_balances — these are former holders whose
