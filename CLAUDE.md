@@ -20,9 +20,24 @@
 
 > **Update this section at the end of each session before closing.**
 
-**Last updated:** 2026-04-18 ~03:30 UTC (session 1 final)
+**Last updated:** 2026-04-18 ~07:55 UTC (session 2)
 **Branch:** `main` synced (HEAD = `44e508a`, both local + origin)
-**Status:** GREEN with one caveat. `RETENTION_DAYS=2` is **live** (deploy `dep-d7henqjbc2fs73dg347g`, 02:28 UTC). First 2d cleanup ran 02:43 UTC and was **still mid-DELETE on `blocks` at session end** — slow because `NOT EXISTS (SELECT 1 FROM transactions ...)` subquery scans a 49GB pre-VACUUM tx table. **No emergency re-run fired.** Indexer healthy throughout (lag 2309, 3.31 blk/s avg → beating chain ~2.3 → catching up). Sites fast (`/` 0.35s, `/blocks` 0.81s, `/txs` 0.79s). One QA finding: homepage **"24H Transactions" card shows `—`** (logged in TODOS.md, P2).
+**Status:** STABLE but disk pinned at 87.2%. `RETENTION_DAYS=1` is **live** (deploy `dep-d7himlbbc2fs73di4tu0`, 06:58:37 UTC) after 2d still triggered the emergency re-run loop. First 1d cycle ran 07:13:38 UTC, deleted 340,503 rows in **38s** (vs 53min for the 2d cycle), VACUUM ANALYZE done by 07:16:24 UTC. Disk lands at **87.2% of 100GB** (`tx=46779MB tt=37843MB blocks=170MB tb=2645MB total=87.15GB`). NO emergency re-run — 1d is the hardcoded floor (`EMERGENCY_RETENTION_MIN_DAYS=1` at [retention-cleanup.ts:124](apps/indexer/src/retention-cleanup.ts:124)), so the self-heal block at line 286-289 short-circuits. Indexer healthy: lag 0-7, 5-7 blk/s tip-following throughout cleanup. **Real disk problem is dead-tuple bloat in `tx` (~25GB reclaimable) — only `VACUUM FULL` returns it to OS.** One QA finding still open: homepage "24H Transactions" card renders `—` (TODOS.md, P2).
+
+### This session (2026-04-18 session 2)
+
+**Why we went from 2d → 1d:** The first 2d cleanup completed 03:36 UTC at disk=88.6%, **above** the 85% emergency threshold. Self-heal fired at 05:07 UTC (right after VACUUM finished), ran 1d emergency, ended at disk=88.8%. Same oscillation pattern as the 3d days — 2d wasn't enough headroom. Setting `RETENTION_DAYS=1` makes 1d the explicit floor, eliminates the 3hr-long emergency oscillation, and removes the post-cleanup lag spikes. Trade-off: users see 24h of history instead of 2d.
+
+**Why NOT VACUUM FULL during this session:** would reclaim ~20-25GB from the tx table heap, but needs an exclusive lock on a 48GB table for ~30-60min while indexer writes. High risk of indexer lag explosion AND `/txs` page hangs. Should be a planned maintenance window with the user watching. Code path exists already at [retention-cleanup.ts:299](apps/indexer/src/retention-cleanup.ts:299) — set `VACUUM_FULL=1` env var on the indexer, restart, remove env var after completion.
+
+**1d cycle profile (07:13:38–07:16:24 UTC):**
+- `cutoff block_number = 93019727`
+- `dex_trades` + `token_transfers` deletes: 7s (212,334 rows tt)
+- `transactions` delete: 9s (127,110 rows)
+- `logs` + `blocks` deletes: 8s (1,059 blocks)
+- Total deletion: 38s. VACUUM ANALYZE: ~3 min.
+- Disk after VACUUM: 87.2% (down from 88.8% earlier)
+- Indexer lag during cleanup: stayed 0-7 blocks, 5-7 blk/s.
 
 ### This session (2026-04-18 session 1)
 
@@ -48,12 +63,12 @@
 - ONE finding (P2, logged in TODOS.md `## Open`): Homepage "Network Overview → 24H Transactions" card renders literally `—` instead of a count. Other 3 cards (Latest Block, Market Cap, BNB Price) populate fine. Sub-label "last 9m ago" timestamps to the 02:28 UTC indexer restart — likely ISR-cached a null query result. Unrelated to retention change (2d > 24h window). Evidence in `.gstack/qa-reports/qa-report-bnbscan-com-2026-04-18.md` (gitignored).
 
 ### Next session — what to check first
-1. **Did the first 2d cleanup complete cleanly?** Look for `[retention] Done — N total rows removed` after ~03:30 UTC, then `disk=XX.X%of100GB`. Should be <85%. No `emergency re-run` line.
-2. **Steady-state test = the 6h recurring cycle ~08:43 UTC.** That one only deletes 6h of data, will finish in seconds, and gives the real disk reading. THIS is what proves 2d works long-term.
-3. **24H Transactions `—` bug.** If it's still showing dash post-VACUUM and post-revalidate (after ~04:00 UTC), open `apps/explorer/app/page.tsx`, find the 24h-count query, check what it returns. Suspect: statement_timeout, or query returns 0 and code renders 0 as `—`.
-4. **Remote+local in sync at `44e508a`.** Pull is a no-op. No drift.
-5. **Old known todos still valid:** holder-balance write hardcoded-skipped; historical gap 92978800–93018666 — by now retention has dropped it (cutoff is 92791959, gap was 92978800-92978666 — actually gap is INSIDE retained window still, will be cut next cycle).
-6. **Live env drift to remember:** `MAX_LAG_BLOCKS=5000` (someone tightened from 30000 since prior session — origin unclear).
+1. **Steady-state confirmation.** Next 6h cycle ~13:13 UTC will only delete 6h of data, complete in seconds, give a clean disk reading. Should still be ~87% (no growth, no shrinkage — bloat is locked in until VACUUM FULL).
+2. **VACUUM FULL maintenance window decision.** Disk has nowhere to go without it. `tx` table heap is ~46GB but real row footprint is much less. Plan: pick a low-traffic window, set `VACUUM_FULL=1` on indexer, restart, expect 30-60min of indexer pause + tx-table read pause, remove env var, restart again. Will reclaim ~20-25GB → disk ~62-67%.
+3. **24H Transactions `—` bug.** If it's still showing dash post-revalidate, open `apps/explorer/app/page.tsx`, find the 24h-count query. Suspect: statement_timeout, or query returns 0 and code renders 0 as `—`.
+4. **Remote+local in sync at `44e508a`.** Pull is a no-op.
+5. **Old known todos still valid:** holder-balance write hardcoded-skipped; historical gap 92978800–93018666 was DROPPED by 1d retention (cutoff 93019727 > 93018666 high end).
+6. **Live env drift:** `MAX_LAG_BLOCKS=5000` (tightened from 30000 in a prior session — origin unclear).
 7. **Pending gstack upgrade:** 0.16.3.0 → 0.18.3.0. Run `/gstack-upgrade` when convenient.
 
 ### Full session arc (2026-04-17 session 3)
