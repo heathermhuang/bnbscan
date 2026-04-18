@@ -40,6 +40,15 @@ Both `rpc-fallback.ts` files now cache null results in-memory with 5-min TTL (up
 
 ## Open
 
+### Agent-readiness: OAuth/OIDC discovery, MCP Server Card (intentionally deferred)
+**Priority:** P3 → **Noted:** 2026-04-18
+isitagentready.com flags three goals we are NOT implementing in tier 2, on purpose:
+- `/.well-known/openid-configuration` / `/.well-known/oauth-authorization-server` — we have no OAuth authorization server. Admin endpoints use a shared bearer secret, not OAuth. Publishing discovery metadata that points to non-existent endpoints would mislead agents.
+- `/.well-known/oauth-protected-resource` — same reason; no OAuth-protected user-facing APIs exist. All `/api/v1/*` endpoints are public.
+- `/.well-known/mcp/server-card.json` — we have no MCP transport endpoint. Standing one up is a separate, larger piece of work (pick a transport, wire read tools to the same data layer as the REST API, decide on auth model). Would be the natural tier-3 follow-up.
+
+When/if a tenant API lands with real OAuth, or an MCP server goes live, add the three well-known docs alongside. Until then, the [agent-skills SKILL.md](apps/explorer/app/.well-known/agent-skills/api-usage/SKILL.md/route.ts) explicitly tells agents these files are absent by design so they stop looking.
+
 ### Homepage "24H Transactions" shows em-dash instead of a count
 **Priority:** P2 → **Found:** 2026-04-18 (by `/qa`)
 Network Overview card on `/` renders `—` in the value row with sub-label "last 9m ago". Other cards (Latest Block, Market Cap, BNB Price) populate correctly. No console errors. Suspect: 24h-count DB query returning null, or ISR cache holding a null across revalidate. Unrelated to `RETENTION_DAYS=2` — 2d > 24h window. Repro: `https://bnbscan.com/`, third card in Network Overview strip. Evidence: `.gstack/qa-reports/qa-report-bnbscan-com-2026-04-18.md` + `screenshots/home2.png`. Check persists past 03:00 UTC before digging into `apps/explorer/app/page.tsx`.
