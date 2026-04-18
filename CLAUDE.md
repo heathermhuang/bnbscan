@@ -20,9 +20,50 @@
 
 > **Update this section at the end of each session before closing.**
 
-**Last updated:** 2026-04-17 (session 3 final)
-**Branch:** `main` (pushed, clean, through commit `c642193`)
-**Status:** ALL GREEN. bnbscan.com fully responsive: homepage 0.8s, /blocks 0.73s, /txs 0.45s. Indexer healthy at 2.27 blk/s, lag shrinking (-16 over 6 min), zero holder-queue activity. Final fix: **hardcoded SKIP_HOLDER_BALANCES** in block-processor.ts — stopped the write storm that was choking the DB.
+**Last updated:** 2026-04-18 (session 5)
+**Branch:** `main` (through merge commit `d2f6a70`, PR #29)
+**Status:** Site partially degraded at handoff — `/blocks` and `/txs` timing out >15s; home 0.84s (ISR cache). VACUUM ANALYZE on 49GB `transactions` + 35GB `token_transfers` still running from the 01:15 UTC retention cycle. Crawler storm (ClaudeBot + meta-externalagent) amplifying the pain. **PR #29 merged + deploying now** to 429 aggressive crawlers on heavy paths — this is the durable fix. Disk at 87.1% → emergency retention (1-day window) will auto-fire after VACUUM loop completes via `EMERGENCY_DISK_PCT=85` branch.
+
+### Session 5 arc (2026-04-18)
+
+**Trigger:** user reported "getting slower again". Probed:
+- `/` 0.84s ✅ (ISR cached)
+- `/blocks` / `/txs` >60s ❌
+- Indexer healthy, lag 700, gaining at 2-3 blk/s
+- Retention fix from session 4 worked — 459,740 rows deleted at 01:15:40 UTC
+
+**Root cause (two compounding):**
+1. **VACUUM ANALYZE still running** on the two big tables (49GB + 35GB). Historical baselines show 11-26 min each under load. No "VACUUM ANALYZE transactions done" log line yet.
+2. **Crawler storm**: `ClaudeBot` and `meta-externalagent` (Meta) were firing 50+ concurrent requests at `/blocks`, `/txs`, `/address/*` — visible in bnbscan-web logs with `responseTimeMS=10000-50000`. Both ignore `robots.txt` (which already disallows `/address/` and `/api/`).
+3. **DB at 87.1%** of 100GB disk (tt grew 25GB→35GB overnight) — above `EMERGENCY_DISK_PCT=85`. Self-heal path in `retention-cleanup.ts:286-296` captures `diskPct` before VACUUM and recurses with `EMERGENCY_RETENTION_MIN_DAYS=1` after the loop completes.
+
+**Fix shipped — PR #29 `fix(explorer): 429 aggressive crawlers on heavy paths`** (merge commit `d2f6a70`)
+- New `apps/explorer/middleware.ts` matches UA substrings (`ClaudeBot`, `meta-externalagent`, `GPTBot`, `Bytespider`, `Amazonbot`, `PerplexityBot`, `CCBot`, `anthropic-ai`, `FacebookBot`, etc.) AND heavy paths (`/blocks`, `/txs`, `/tx/`, `/address/`, `/token/`, `/block/`) → returns **429 with `Retry-After: 3600`**.
+- Real users unaffected — UA match only. Home + ISR paths not throttled.
+- Deploy in progress at handoff: `dep-d7he3oernols73dqqfig` (build_in_progress).
+
+### What to verify next session
+1. **Deploy live?** `curl -H "User-Agent: meta-externalagent/1.1" https://bnbscan.com/blocks` should return 429. Real browser UA should return 200.
+2. **VACUUM done?** Search indexer logs for `VACUUM ANALYZE transactions done` + `token_transfers done`. After completion, `/blocks` and `/txs` should drop back to sub-1s (planner re-stat + reduced IO contention).
+3. **Emergency retention fired?** Search indexer logs for `emergency re-run with 1d window`. If disk% stays ≥85%, the self-heal path should have triggered a second deletion pass at 1-day retention. If NOT fired, check whether the 6h setInterval ran again.
+4. **Disk recovery?** After emergency cleanup + VACUUM, `total=XX.XGB disk=YY.Y%of100GB` should drop below 85%. If still above 85%, consider `VACUUM FULL` (set `VACUUM_FULL=1` env var on indexer, restart, then remove — locks tables 10-30 min but returns space to OS).
+
+### Still-TODO / future work
+- **tt table growth 25→35GB overnight** not fully explained — investigate steady-state write rate vs bloat; possibly a surge of contract activity. Worth profiling.
+- **BNB_RPC_URL** still only 2-RPC round-robin. Adding 2-3 more public BSC RPCs gives more headroom for catch-up after emergency skips.
+- **PR #27** (session 4 handoff docs) still open? — check and close/merge as needed.
+
+### Key takeaways (session 5)
+- **Aggressive AI crawlers (ClaudeBot, GPTBot, PerplexityBot) + Meta's scraper ignore `robots.txt`**. Any heavy DB path MUST be protected at middleware level, not just in `robots.ts`. PR #29 is the template.
+- **VACUUM ANALYZE under concurrent load is slow**: 11-26 min per big table even with only moderate indexer writes. During that window, any amplified traffic = user-visible outage. Bot throttling is the structural fix.
+- **Disk pressure trigger works**: `EMERGENCY_DISK_PCT=85` in the refactored retention will auto-tighten to 1-day, but only AFTER the VACUUM loop finishes. If under real pressure, consider skipping VACUUM in favor of a faster second delete pass.
+
+### Previous session handoff — session 4 (2026-04-17 → 04-18 early AM)
+Root cause of weeks-long DB degradation: `drizzle-orm/postgres-js` `.execute()` returns `postgres.RowList` whose affected-row count is `.count`, NOT `.rowCount`. All 4 retention delete call sites + the admin prune route read undefined `.rowCount`, so the `if (totalDeleted > 0) VACUUM ANALYZE` guard never fired. Weeks of un-VACUUMed DELETEs → massive index bloat → `/blocks` and `/txs` collapsed to 30-60s.
+- Commit `e0a3098` — fix rowCount → count in `retention-cleanup.ts` (4 sites) and `db-prune/route.ts` (1 site).
+- Commit `2dbeafe` (PR #28) — refactor retention to block_number-based DELETE (100-1000x faster than timestamp seq scan), add `EMERGENCY_DISK_PCT=85` self-heal, add fallback for stale indexer, widen whitelist to include `token_balances`.
+- First retention run after deploy deleted 1,178,369 rows, /blocks dropped 60s→0.29s before VACUUM even finished (planner re-stat).
+- Also lowered `MAX_LAG_BLOCKS=5000` to trigger skip at 8365 lag — indexer caught up 7162→160.
 
 ### Full session arc (2026-04-17 session 3)
 
@@ -177,3 +218,6 @@ pnpm install
 pnpm dev          # starts all apps via turbo
 pnpm test         # runs vitest
 ```
+
+
+codex will review your output once you are done
