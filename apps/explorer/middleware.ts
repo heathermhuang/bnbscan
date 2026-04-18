@@ -35,6 +35,10 @@ const AGGRESSIVE_BOT_UAS = [
 
 // Heavy paths that hit big tables (transactions/token_transfers/blocks).
 // Home is ISR-cached and doesn't need throttling.
+//
+// The `/md/tx/` and `/md/block/` mirrors are listed explicitly — an aggressive
+// crawler can request those directly, bypassing the canonical-path check, and
+// each hit runs a DB lookup in the /md route handler.
 const HEAVY_PATH_PREFIXES = [
   '/blocks',
   '/txs',
@@ -42,6 +46,8 @@ const HEAVY_PATH_PREFIXES = [
   '/address/',
   '/token/',
   '/block/',
+  '/md/tx/',
+  '/md/block/',
 ]
 
 function isAggressiveBot(ua: string | null): boolean {
