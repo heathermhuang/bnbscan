@@ -20,9 +20,31 @@
 
 > **Update this section at the end of each session before closing.**
 
-**Last updated:** 2026-04-18 ~07:55 UTC (session 2)
-**Branch:** `main` synced (HEAD = `44e508a`, both local + origin)
-**Status:** STABLE but disk pinned at 87.2%. `RETENTION_DAYS=1` is **live** (deploy `dep-d7himlbbc2fs73di4tu0`, 06:58:37 UTC) after 2d still triggered the emergency re-run loop. First 1d cycle ran 07:13:38 UTC, deleted 340,503 rows in **38s** (vs 53min for the 2d cycle), VACUUM ANALYZE done by 07:16:24 UTC. Disk lands at **87.2% of 100GB** (`tx=46779MB tt=37843MB blocks=170MB tb=2645MB total=87.15GB`). NO emergency re-run — 1d is the hardcoded floor (`EMERGENCY_RETENTION_MIN_DAYS=1` at [retention-cleanup.ts:124](apps/indexer/src/retention-cleanup.ts:124)), so the self-heal block at line 286-289 short-circuits. Indexer healthy: lag 0-7, 5-7 blk/s tip-following throughout cleanup. **Real disk problem is dead-tuple bloat in `tx` (~25GB reclaimable) — only `VACUUM FULL` returns it to OS.** One QA finding still open: homepage "24H Transactions" card renders `—` (TODOS.md, P2).
+**Last updated:** 2026-04-18 ~09:07 UTC (session 3)
+**Branch:** `main` synced (HEAD = `a8a2938`, both local + origin)
+**Status:** Agent-readiness tier 2 shipped and verified live on both domains via PR [#32](https://github.com/heathermhuang/bnbscan/pull/32). Deploys `dep-d7hkgftbu82c73b7putg` (bnbscan-web) and `dep-d7hkgl9knles738b52hg` (ethscan-web) both went live 09:05 UTC. Disk/retention state unchanged from session 2: pinned at 87.2% with `RETENTION_DAYS=1`, bloat-bound until a `VACUUM FULL` maintenance window is taken. 24H Transactions em-dash still open (TODOS.md, P2).
+
+### This session (2026-04-18 session 3)
+
+Shipped tier 2 of the isitagentready.com fixes (tier 1 was [#31](https://github.com/heathermhuang/bnbscan/pull/31)):
+
+- **Markdown negotiation** — middleware rewrites `Accept: text/markdown` to `/md<path>` for `/`, `/about`, `/developer`, `/api-docs`. Browser path (HTML) unchanged. Verified: `curl -H "Accept: text/markdown" https://bnbscan.com/` → `text/markdown; charset=utf-8` with `Vary: Accept`. Dynamic pages (tx/block/address) intentionally out — per-request DB reads would bypass ISR.
+- **Agent Skills index** — `/.well-known/agent-skills/index.json` per agentskills.io v0.2.0 + `SKILL.md` at `api-usage/`. sha256 in the index is computed from the live SKILL.md body via a shared `skillBody()` import; verified matching on both chains in prod (`d693a…` for bnb, `2e116…` for eth).
+- **WebMCP** — `components/agent/WebMcpProvider.tsx` mounted in RootLayout registers 4 read-only tools: `open_transaction`, `open_address`, `open_block`, `search`. Feature-detected; silent no-op on browsers without `navigator.modelContext`.
+- **Homepage `Link` header** gained `rel="https://agentskills.io/rel/index"`. Verified live.
+
+**Intentionally skipped** (documented in TODOS.md → Open → "Agent-readiness: OAuth/OIDC discovery, MCP Server Card"):
+- Goals 2, 3 (OAuth/OIDC + Protected Resource) — no OAuth server exists; admin uses shared bearer. Publishing fake discovery docs would mislead agents.
+- Goal 4 (MCP Server Card) — no MCP transport endpoint. Tier-3 project.
+
+The SKILL.md body explicitly tells agents these three well-known docs are absent by design so they stop retrying.
+
+### Next session — what to check first
+
+1. **Re-run isitagentready.com scan** against both bnbscan.com and ethscan.io — expect 3 fewer failures than the tier-1 baseline.
+2. **Disk still 87%** — next 6h retention cycle ~13:13 UTC should deliver a clean disk number. Plan the `VACUUM FULL` window (will reclaim ~20-25GB); set `VACUUM_FULL=1` on the indexer, restart, remove after completion.
+3. **Homepage "24H Transactions" em-dash bug** (TODOS.md P2) still open.
+4. **Tier 3 follow-up** if the isitagentready score is still not where we want it: either (a) stand up a minimal read-only MCP server at `/api/mcp` and publish the server card, or (b) extend markdown negotiation to `/tx/:hash`, `/block/:n`, `/address/:addr` (accepting the ISR-bypass cost).
 
 ### This session (2026-04-18 session 2)
 
