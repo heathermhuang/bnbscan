@@ -20,9 +20,42 @@
 
 > **Update this section at the end of each session before closing.**
 
-**Last updated:** 2026-04-18 ~09:07 UTC (session 3)
-**Branch:** `main` synced (HEAD = `a8a2938`, both local + origin)
-**Status:** Agent-readiness tier 2 shipped and verified live on both domains via PR [#32](https://github.com/heathermhuang/bnbscan/pull/32). Deploys `dep-d7hkgftbu82c73b7putg` (bnbscan-web) and `dep-d7hkgl9knles738b52hg` (ethscan-web) both went live 09:05 UTC. Disk/retention state unchanged from session 2: pinned at 87.2% with `RETENTION_DAYS=1`, bloat-bound until a `VACUUM FULL` maintenance window is taken. 24H Transactions em-dash still open (TODOS.md, P2).
+**Last updated:** 2026-04-18 ~10:35 UTC (session 4)
+**Branch:** `main` is at `c912f97`. Three open PRs from this session, all awaiting review/merge: [#34](https://github.com/heathermhuang/bnbscan/pull/34) `fix/homepage-24h-tx-count`, [#35](https://github.com/heathermhuang/bnbscan/pull/35) `feat/markdown-tx-block`, [#36](https://github.com/heathermhuang/bnbscan/pull/36) `docs/session-4-handoff-v2` (interim doc — supersede with this commit's PR).
+**Status:** **VACUUM FULL complete.** Disk: **87.2% → 64.6%**, ~22GB reclaimed across `transactions` (-38GB, 49GB→10.5GB) and `token_transfers` (-18GB, 35GB→17GB). `VACUUM_FULL=1` env var has been **deleted** from the bnbscan-indexer service (verified via Render API list call), and a clean redeploy `dep-d7hlrt2qqhas738jv10g` was triggered at 10:33:24 UTC so the next restart will not re-run VACUUM FULL. Indexer recovered to lag=0 at chain rate (~2.5-3 blk/s) by 10:30 UTC.
+
+### This session (2026-04-18 session 4)
+
+**Three workstreams in parallel after the user said "all":**
+
+1. **Em-dash fix → [PR #34](https://github.com/heathermhuang/bnbscan/pull/34) `fix/homepage-24h-tx-count`** — Root cause: `fetchTxCount24h` ran `COUNT(*) WHERE timestamp > NOW() - INTERVAL '24 hours'`. Index scan on `tx_timestamp_idx` was fine, but COUNT must visit heap pages, and on the bloated tx heap that tripped the 15s `dbTimeout` fallback to 0 → rendered as `—`. Fix in [page.tsx:118-138](apps/explorer/app/page.tsx:118): switched to `block_number > tipBlock - blocksPer24h` (covered by `tx_block_idx`, no heap visibility-map dependence) AND made the function return `null` on error so the StatCard distinguishes "unknown" from a true zero. Verified locally against prod DB: 2,875,175 tx in last 24h. Now that VACUUM FULL is done the original timestamp query would also work — but the block_number filter is just better, no reason to revert.
+
+2. **Tier-3 agent-readiness → [PR #35](https://github.com/heathermhuang/bnbscan/pull/35) `feat/markdown-tx-block`** — User chose "ship markdown today, plan MCP next session". Extends `Accept: text/markdown` to `/tx/{hash}` and `/block/{number}` (PK lookups, sub-ms reads, `Cache-Control: max-age=31536000, immutable`). `/address/*` intentionally excluded — fan-out queries against bloated heap can hang. Middleware regex-validates hash + block format before rewriting. Not-found returns 404 markdown with API/web pointers + 60s cache. SKILL.md updated; sha256 in agent-skills index auto-rotates from `skillBody()`. All five branches verified locally (tx-found 200, block-found 200, tx-not-found 404, /address-with-md no-rewrite, /block-no-md-header no-rewrite).
+
+3. **VACUUM FULL → COMPLETE.** Recipe followed (per session 3 lesson "set env BEFORE deploy"): `PUT /v1/services/srv-d70kbmia214c73ebs3a0/env-vars/VACUUM_FULL` `{"value":"1"}`, then `POST /v1/services/srv-d70kbmia214c73ebs3a0/deploys`. Deploy `dep-d7hks9hf9bms73fm89b0` went live 09:27:10 UTC. VACUUM FULL ran sequentially per [retention-cleanup.ts:299-314](apps/indexer/src/retention-cleanup.ts:299):
+   - `token_transfers`: 09:27:12 → 09:56:10 (29 min, ~18GB reclaimed)
+   - `transactions`: 09:56:10 → 10:11:52 (16 min, ~38GB reclaimed)
+   - `blocks`, `logs`, `dex_trades`, `gas_history`: 10:11:52 → 10:11:59 (~7s, mostly empty/small)
+   - `token_balances`: 10:11:59 → 10:16:05 (4 min)
+   - **Total: 49 minutes.** First post-VACUUM size report (10:10:25, mid-run): `total=64.61GB tx=10563MB tt=16997MB blocks=170MB logs=0MB tb=2645MB dex=0MB disk=64.6%of100GB`. Final reading will likely be slightly lower once the next 6h retention cycle (~16:00 UTC) reports.
+
+**Indexer behaviour during VACUUM:** processed at 2-3 blk/s throughout, lag peaked around 3,642 blocks (under the 5,000 `MAX_LAG_BLOCKS` skip threshold) and was back to lag=0 by 10:30 UTC. The `transactions` VACUUM phase took an exclusive lock on the tx table — the `/txs` HTML page reads paused for 16 min — but `/blocks` and `/` stayed responsive (homepage uses ISR). No user-visible outage.
+
+**isitagentready.com re-scan attempted but the SPA scanner is Cloudflare-blocked from headless Chromium** — the browser tab gets killed every time the form submits (`Target page, context or browser has been closed`). Pivoted to direct curl-verification of every tier-1+2 signal on both domains: robots.txt with AI rules, Link headers (with `agentskills.io/rel/index`), `/.well-known/api-catalog` (RFC 9727), `/.well-known/agent-skills/index.json` (sha256 d693a… BNB / 2e116… ETH), markdown negotiation on the 4 static pages. All clean. The actual SPA-scanner score the user wants — they'll need to run that themselves in a real browser, takes 30 seconds.
+
+**Render API recipe (worth keeping for next time):**
+- API key: `/Users/heatherm/Documents/Claude/bnbscan/.render-api-key`. File contains `RENDER_API_KEY=rnd_...`; strip the prefix before passing as `Authorization: Bearer rnd_...`.
+- Owner: `tea-d6roaibuibrs73dteu2g`. Indexer service: `srv-d70kbmia214c73ebs3a0`.
+- VACUUM FULL on/off: `PUT|DELETE /v1/services/{svc}/env-vars/VACUUM_FULL` then `POST /v1/services/{svc}/deploys`. Always trigger a deploy after env mutation; mid-build env changes are unreliable.
+- Logs: `GET /v1/logs?ownerId=...&resource=...&limit=N&direction=backward[&text=...&startTime=...]`. Use `text=` with URL-encoded substring for filtering. The `text=disk` query reliably finds the size-report lines.
+
+### Next session — what to check first
+
+1. **Final disk %.** Pull a fresh size-report log: `text=disk&startTime=2026-04-18T10:30:00Z`. The first post-redeploy retention cycle (~16:00 UTC) will give the steady-state figure. If it's not there yet, look for it on the next pass.
+2. **PR #34 + #35 + this session's handoff PR.** All three should be reviewed and merged. PR #36 is the *interim* handoff (pre-VACUUM-finalize) and is now superseded — close it or merge as historical context. The new handoff PR opened at the end of this session contains the post-VACUUM state.
+3. **Verify VACUUM_FULL stays unset.** If the indexer ever restarts and the env var was somehow re-set, VACUUM FULL would run again. Spot-check via the env-vars endpoint.
+4. **Tier-3 next move (MCP).** Stand up `/.well-known/mcp` + `/api/mcp` minimal read-only server. Multi-day project. Start by reading the Cloudflare MCP server spec and picking a transport (HTTP+SSE is simplest). Could also consider extending markdown to `/address/{addr}` now that the bloat is gone — the original concern (fan-out queries on a bloated heap hanging for minutes) is significantly reduced.
+5. **Disk growth budget:** at 1d retention with the now-clean heap, total should stay well under 70GB even at peak. If it climbs past 75% within a few days, a follow-up VACUUM FULL is cheap and we know the recipe works.
 
 ### This session (2026-04-18 session 3)
 
