@@ -117,19 +117,20 @@ async function fetchNativePrice(): Promise<{ usd: number; change24h: number } | 
 
 /** Count transactions indexed in the last 24 hours.
  *
- * Uses `block_number > tipBlock - blocksPer24h` (covered by `tx_block_idx`) instead of a
- * `timestamp >` range scan. The timestamp index drives an index scan but COUNT must visit
- * heap pages — and on a bloated, dead-tuple-heavy table, that's where the 15s timeout was
- * tripping and producing a phantom 0 (rendered as the em-dash bug). Returns null on
- * error/timeout so the caller can distinguish "unknown" from a genuine zero.
+ * Anchors the cutoff to the indexer tip's wall-clock timestamp (not `NOW()`),
+ * so the window stays exactly 24h even when the indexer is lagging or when
+ * block time varies (ETH missed slots, BSC occasional slow blocks).
+ *
+ * Returns null on error/timeout so the caller can distinguish "unknown" from
+ * a genuine zero — the em-dash bug originally came from a COUNT against the
+ * bloated transactions heap hitting the 15s timeout and falling back to 0.
  */
-async function fetchTxCount24h(tipBlock: number | null): Promise<number | null> {
-  if (!tipBlock) return null
-  const blocksPer24h = Math.floor(86_400 / chainConfig.blockTime)
-  const cutoff = tipBlock - blocksPer24h
+async function fetchTxCount24h(latestBlock: { timestamp: Date } | undefined): Promise<number | null> {
+  if (!latestBlock) return null
+  const cutoff = new Date(latestBlock.timestamp.getTime() - 24 * 60 * 60 * 1000)
   try {
     const result = await db.execute(
-      sql`SELECT COUNT(*)::int AS cnt FROM transactions WHERE block_number > ${cutoff}`
+      sql`SELECT COUNT(*)::int AS cnt FROM transactions WHERE timestamp > ${cutoff.toISOString()}`
     )
     return Number(Array.from(result)[0]?.cnt ?? 0)
   } catch {
@@ -212,7 +213,7 @@ export default async function HomePage() {
   latestTxs = txsResult
 
   const latestBlock = latestBlocks[0]
-  const txCount24h = await dbTimeout(fetchTxCount24h(latestBlock?.number ?? null), null)
+  const txCount24h = await dbTimeout(fetchTxCount24h(latestBlock), null)
 
   const priceDisplay = nativePrice
     ? `$${nativePrice.usd.toFixed(2)}`
