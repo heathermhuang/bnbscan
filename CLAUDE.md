@@ -20,9 +20,9 @@
 
 > **Update this section at the end of each session before closing.**
 
-**Last updated:** 2026-04-18 (session 1)
-**Branch:** `main` (clean locally, remote is +1 at `d2f6a70` — 429 bot-crawler gate on DB-heavy paths)
-**Status:** GREEN. bnbscan.com responsive (/ 0.35s, /blocks 0.81s, /txs 0.79s). Indexer 2.3–2.7 blk/s, lag oscillating 500–1200 (chain-matching, not catching up, not falling behind). Config change: **set `RETENTION_DAYS=2`** on bnbscan-indexer (was 3) — deploy `dep-d7henqjbc2fs73dg347g` in progress when handoff was written.
+**Last updated:** 2026-04-18 ~03:30 UTC (session 1 final)
+**Branch:** `main` synced (HEAD = `44e508a`, both local + origin)
+**Status:** GREEN with one caveat. `RETENTION_DAYS=2` is **live** (deploy `dep-d7henqjbc2fs73dg347g`, 02:28 UTC). First 2d cleanup ran 02:43 UTC and was **still mid-DELETE on `blocks` at session end** — slow because `NOT EXISTS (SELECT 1 FROM transactions ...)` subquery scans a 49GB pre-VACUUM tx table. **No emergency re-run fired.** Indexer healthy throughout (lag 2309, 3.31 blk/s avg → beating chain ~2.3 → catching up). Sites fast (`/` 0.35s, `/blocks` 0.81s, `/txs` 0.79s). One QA finding: homepage **"24H Transactions" card shows `—`** (logged in TODOS.md, P2).
 
 ### This session (2026-04-18 session 1)
 
@@ -35,11 +35,26 @@
 
 **Fix applied:** `RETENTION_DAYS=3 → 2` via Render API (PUT /v1/services/srv-d70kbmia214c73ebs3a0/env-vars/RETENTION_DAYS `{"value":"2"}`). Triggered explicit deploy after env set (per prior session's lesson). Expected new steady state: tx ~33GB + tt ~34GB ≈ 70GB total, well under 85% emergency threshold. Users see 2d of history instead of 3d.
 
+**First 2d cleanup observations (02:43–03:29 UTC, in flight at handoff):**
+- `cutoff block_number = 92791959` (rows older than 2026-04-16 02:43 UTC)
+- `dex_trades` + `token_transfers` deletes: 02:43 → 02:51 (8 min)
+- `transactions` delete: 02:51 → 03:07 (16 min)
+- `logs` + `blocks` deletes: started 03:07, **still running at 03:29** (22+ min). The blocks DELETE's `NOT EXISTS` subquery against the 49GB tx table (pre-VACUUM, full of dead tuples) is the slow part. One-time pain — subsequent 6h cycles delete 8% as much data.
+- Indexer lag during cleanup: 1163 → peak ~2500 → recovering to 2309 by 03:29. Throughput recovered to 3.3 blk/s avg (chain ~2.3, beating it).
+- **Disk % NOT yet logged** — size report fires after the run completes + VACUUM ANALYZE. Won't see it until first cycle finishes.
+
+**QA review (`/qa` invoked, quick tier):**
+- All pages render, no console errors. `/`, `/blocks`, `/txs` all clean.
+- ONE finding (P2, logged in TODOS.md `## Open`): Homepage "Network Overview → 24H Transactions" card renders literally `—` instead of a count. Other 3 cards (Latest Block, Market Cap, BNB Price) populate fine. Sub-label "last 9m ago" timestamps to the 02:28 UTC indexer restart — likely ISR-cached a null query result. Unrelated to retention change (2d > 24h window). Evidence in `.gstack/qa-reports/qa-report-bnbscan-com-2026-04-18.md` (gitignored).
+
 ### Next session — what to check first
-1. **Verify 2d retention held disk <85% for a full 6h cycle.** Check `disk=XX.X%of100GB` line after the first post-deploy retention run completes. Should settle 70-80%. If emergency still fires, further tightening needed.
-2. **Remote main is +1** — `d2f6a70 fix(explorer): 429 aggressive crawlers on heavy paths (#29)`. Pull before starting code work.
-3. **Live env drift from prior handoff**: `MAX_LAG_BLOCKS=5000` now (was 30000 in session 3 notes). Not 30000 anymore. Someone tightened it — check if intentional.
-4. **Old known todos still valid:** holder-balance write is still hardcoded-skipped; historical gap 92978800–93018666 still unindexed (retention will drop it soon either way now).
+1. **Did the first 2d cleanup complete cleanly?** Look for `[retention] Done — N total rows removed` after ~03:30 UTC, then `disk=XX.X%of100GB`. Should be <85%. No `emergency re-run` line.
+2. **Steady-state test = the 6h recurring cycle ~08:43 UTC.** That one only deletes 6h of data, will finish in seconds, and gives the real disk reading. THIS is what proves 2d works long-term.
+3. **24H Transactions `—` bug.** If it's still showing dash post-VACUUM and post-revalidate (after ~04:00 UTC), open `apps/explorer/app/page.tsx`, find the 24h-count query, check what it returns. Suspect: statement_timeout, or query returns 0 and code renders 0 as `—`.
+4. **Remote+local in sync at `44e508a`.** Pull is a no-op. No drift.
+5. **Old known todos still valid:** holder-balance write hardcoded-skipped; historical gap 92978800–93018666 — by now retention has dropped it (cutoff is 92791959, gap was 92978800-92978666 — actually gap is INSIDE retained window still, will be cut next cycle).
+6. **Live env drift to remember:** `MAX_LAG_BLOCKS=5000` (someone tightened from 30000 since prior session — origin unclear).
+7. **Pending gstack upgrade:** 0.16.3.0 → 0.18.3.0. Run `/gstack-upgrade` when convenient.
 
 ### Full session arc (2026-04-17 session 3)
 
