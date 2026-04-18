@@ -70,8 +70,24 @@ const HOMEPAGE_LINK_HEADER = [
 ].join(', ')
 
 // Pages that have a markdown representation at /md<path>. Keep in sync with
-// the HANDLERS map in app/md/[[...slug]]/route.ts.
+// STATIC_HANDLERS + dispatch() in app/md/[[...slug]]/route.ts.
 const MARKDOWN_PATHS = new Set<string>(['/', '/about', '/developer', '/api-docs'])
+
+// Dynamic patterns that also have markdown representations. PK lookups in the
+// route handler — sub-millisecond and cached for a year by Cache-Control.
+// /address/* is intentionally excluded; its fan-out queries are too heavy.
+const MARKDOWN_DYNAMIC = [
+  /^\/tx\/0x[0-9a-fA-F]{64}$/,
+  /^\/block\/\d{1,12}$/,
+]
+
+function hasMarkdownRepresentation(pathname: string): boolean {
+  if (MARKDOWN_PATHS.has(pathname)) return true
+  for (const re of MARKDOWN_DYNAMIC) {
+    if (re.test(pathname)) return true
+  }
+  return false
+}
 
 /**
  * Parse an Accept header and return true if `text/markdown` is preferred over
@@ -121,7 +137,7 @@ export function middleware(request: NextRequest) {
   // canonical and caches key on Accept via the Vary header emitted by /md.
   if (
     !pathname.startsWith('/md') &&
-    MARKDOWN_PATHS.has(pathname) &&
+    hasMarkdownRepresentation(pathname) &&
     prefersMarkdown(request.headers.get('accept'))
   ) {
     const url = request.nextUrl.clone()
