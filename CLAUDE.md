@@ -20,9 +20,26 @@
 
 > **Update this section at the end of each session before closing.**
 
-**Last updated:** 2026-04-17 (session 3 final)
-**Branch:** `main` (pushed, clean, through commit `c642193`)
-**Status:** ALL GREEN. bnbscan.com fully responsive: homepage 0.8s, /blocks 0.73s, /txs 0.45s. Indexer healthy at 2.27 blk/s, lag shrinking (-16 over 6 min), zero holder-queue activity. Final fix: **hardcoded SKIP_HOLDER_BALANCES** in block-processor.ts — stopped the write storm that was choking the DB.
+**Last updated:** 2026-04-18 (session 1)
+**Branch:** `main` (clean locally, remote is +1 at `d2f6a70` — 429 bot-crawler gate on DB-heavy paths)
+**Status:** GREEN. bnbscan.com responsive (/ 0.35s, /blocks 0.81s, /txs 0.79s). Indexer 2.3–2.7 blk/s, lag oscillating 500–1200 (chain-matching, not catching up, not falling behind). Config change: **set `RETENTION_DAYS=2`** on bnbscan-indexer (was 3) — deploy `dep-d7henqjbc2fs73dg347g` in progress when handoff was written.
+
+### This session (2026-04-18 session 1)
+
+**Finding: disk was structurally over-committed at 3d retention.**
+- tt was still climbing toward 3d steady-state: 25GB → 35.5GB in 14h (+10GB, ~0.7GB/hr). Projected 3d steady = ~51GB.
+- tx stable at 49GB. At 3d, tt+tx alone targets ~100GB — plus indexes, logs, tb → over 100GB disk ceiling.
+- 01:15 UTC retention cycle logged "⚠ DB at 87.1%", self-heal (PR #28) fired correctly at 02:13 UTC after VACUUM ANALYZE finished (58min gap), triggered 1d emergency re-run.
+- **Plain `VACUUM ANALYZE` doesn't return space to OS — only `VACUUM FULL` does.** So `pg_total_relation_size` stays at peak post-delete. Disk will hover ~87% permanently because reclaimed pages refill before OS sees them back.
+- Net behavior without fix: emergency 1d retention would fire **on every 6h cycle forever**. Retention window oscillates between aspirational 3d and actual 1d.
+
+**Fix applied:** `RETENTION_DAYS=3 → 2` via Render API (PUT /v1/services/srv-d70kbmia214c73ebs3a0/env-vars/RETENTION_DAYS `{"value":"2"}`). Triggered explicit deploy after env set (per prior session's lesson). Expected new steady state: tx ~33GB + tt ~34GB ≈ 70GB total, well under 85% emergency threshold. Users see 2d of history instead of 3d.
+
+### Next session — what to check first
+1. **Verify 2d retention held disk <85% for a full 6h cycle.** Check `disk=XX.X%of100GB` line after the first post-deploy retention run completes. Should settle 70-80%. If emergency still fires, further tightening needed.
+2. **Remote main is +1** — `d2f6a70 fix(explorer): 429 aggressive crawlers on heavy paths (#29)`. Pull before starting code work.
+3. **Live env drift from prior handoff**: `MAX_LAG_BLOCKS=5000` now (was 30000 in session 3 notes). Not 30000 anymore. Someone tightened it — check if intentional.
+4. **Old known todos still valid:** holder-balance write is still hardcoded-skipped; historical gap 92978800–93018666 still unindexed (retention will drop it soon either way now).
 
 ### Full session arc (2026-04-17 session 3)
 
@@ -177,3 +194,6 @@ pnpm install
 pnpm dev          # starts all apps via turbo
 pnpm test         # runs vitest
 ```
+
+
+codex will review your output once you are done
