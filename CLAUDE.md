@@ -20,9 +20,46 @@
 
 > **Update this section at the end of each session before closing.**
 
-**Last updated:** 2026-04-18 ~10:35 UTC (session 4)
-**Branch:** `main` is at `c912f97`. Three open PRs from this session, all awaiting review/merge: [#34](https://github.com/heathermhuang/bnbscan/pull/34) `fix/homepage-24h-tx-count`, [#35](https://github.com/heathermhuang/bnbscan/pull/35) `feat/markdown-tx-block`, [#36](https://github.com/heathermhuang/bnbscan/pull/36) `docs/session-4-handoff-v2` (interim doc — supersede with this commit's PR).
-**Status:** **VACUUM FULL complete.** Disk: **87.2% → 64.6%**, ~22GB reclaimed across `transactions` (-38GB, 49GB→10.5GB) and `token_transfers` (-18GB, 35GB→17GB). `VACUUM_FULL=1` env var has been **deleted** from the bnbscan-indexer service (verified via Render API list call), and a clean redeploy `dep-d7hlrt2qqhas738jv10g` was triggered at 10:33:24 UTC so the next restart will not re-run VACUUM FULL. Indexer recovered to lag=0 at chain rate (~2.5-3 blk/s) by 10:30 UTC.
+**Last updated:** 2026-04-19 ~09:17 UTC (session 5)
+**Branch:** `main` at `03295a3`. Clean tree except `.claude/scheduled_tasks.lock` (untracked, gitignored territory). No open PRs opened this session.
+**Status:** **ethscan-db 90% alert — live mitigation applied, awaiting verification.** `RETENTION_DAYS` on eth-indexer changed **7 → 4** via Render API at 09:15 UTC, deploy `dep-d7i9qr9o3t8c73aq1s4g` triggered at 09:16:29 UTC. A ScheduleWakeup is set for **17:43 UTC local (2026-04-19 ~09:43 UTC)** to pull logs and confirm the first 4-day retention cycle freed ~10GB and disk dropped to ~50–55%.
+
+### This session (2026-04-19 session 5) — ethscan-db disk alert
+
+**Alert:** PostgreSQL database `ethscan-db` using more than 90% of 30GB.
+
+**Diagnosis (no code change, log-reading only):**
+- Size-report trajectory from [retention-cleanup.ts] output: 15.30GB on 2026-04-16 → 25.30GB on 2026-04-19 06:48 UTC (84.3% of 30GB). Growth ~**3.3 GB/day**, steeper than the "~3GB/day" note previously in this doc.
+- `RETENTION_DAYS=7` was set, but the three most recent retention cycles (2026-04-18T18:48, 2026-04-19T00:48, 2026-04-19T06:48) all logged `cutoff block_number = 24867353` and `Done — 0 total rows removed`. **This is correct behaviour**, not a bug: the ETH DB was created 2026-04-13 (first eviction at 7d retention would be 2026-04-20), and 24867353 is the oldest block present in the table (indexer started there after the MAX_LAG_BLOCKS skip-forward). No data existed to delete.
+- Projected Day-7 steady state at the observed rate: 3.3 × 7 ≈ 23GB data + ~4–5GB indexes ≈ **~28GB = 93% of 30GB**. The alert fired because the accumulation was crossing the 90% mark between the 06:48 cycle (84.3%) and the next scheduled 12:48 cycle (~88%), with steady-state past the disk ceiling.
+
+**Fix applied:** `RETENTION_DAYS=7 → 4` on eth-indexer (`srv-d70kbdqa214c73ebrtq0`). Rationale: matches the tighter policy adopted for BNB after similar disk pressure, reversible, no cost delta. Alternative (expand disk to 50GB at ~$10/mo) was offered but not chosen. With the 4-day cutoff the first post-deploy cleanup should evict ~3 days × 3.3GB ≈ **10GB** and land disk around 50–55%.
+
+**Expected timeline after 09:16:29 UTC deploy:**
+1. Build completes ~09:20 UTC.
+2. Startup retention is deferred 15 min (per `cb349ba`), so first cleanup with the new cutoff runs ~09:35 UTC. `blocks` DELETE with `NOT EXISTS (tx)` subquery against the 25GB tx table will be the slow phase — expect 5–20 min based on BNB session-2 precedent (22 min for BNB's first post-retention-change cycle on a bloated heap). Size-report log fires after VACUUM ANALYZE completes.
+3. Scheduled retention resumes every 6h: next natural cycle ~15:35 UTC.
+
+**Env verification after fix:**
+- ETH indexer env vars confirmed via API: `RETENTION_DAYS=4`, `DB_DISK_GB=30`, `INDEX_CONCURRENCY=8`, `DB_POOL_SIZE=3`, `ETH_RPC_URL=https://ethereum-rpc.publicnode.com`, `START_BLOCK=24710000`, `NODE_OPTIONS=--max-old-space-size=1280`, `CHAIN=eth`.
+- DB still `ethscan-db` (dpg-d7e4b83bc2fs73ec3la0-a), basic_1gb, 30GB disk — unchanged.
+
+### Next session — what to check first
+
+1. **Verify the ScheduleWakeup fired and the 4-day retention ran.** If the wakeup already ran in this session, its summary should be the first thing in this doc's next update. Otherwise pull a fresh log: `curl -H "Authorization: Bearer $RENDER_API_KEY" "https://api.render.com/v1/logs?ownerId=tea-d6roaibuibrs73dteu2g&resource=srv-d70kbdqa214c73ebrtq0&limit=30&direction=backward&text=retention"`. Expected: `cutoff block_number` **advanced by ~3 days of blocks** (~21,600 blocks above 24867353, i.e. ~24,889,000), non-zero rows removed, disk% in the 50–55% range.
+2. **If the retention cycle did NOT free space:** the remaining hypothesis is that the blocks table only contains blocks from the recent tip-indexing (startup skipped a lot via `MAX_LAG_BLOCKS`), so MIN(block with timestamp >= now-4d) might still be 24867353 if the indexer's oldest indexed block is newer than 4 days. In that case: either drop to `RETENTION_DAYS=2`, expand disk to 50GB, or both.
+3. **Consider enabling `VACUUM FULL=1` on the eth-indexer** after the first retention cycle frees rows. Post-retention, the tx heap will have ~40% dead tuples (~10GB tx, ~14GB tt) and plain VACUUM ANALYZE won't return pages to the OS. The BNB VACUUM FULL session-4 recipe transfers directly: set env, deploy, wait ~30–60 min (ETH heap is ~half BNB's size, so expect ~25 min). Non-urgent unless disk stays above 70% after the first retention cycle completes.
+4. **Update "Current DB specs" comment** in this doc — the claim "~3GB/day steady-state fits comfortably in 30GB disk" was wrong. Actual rate is ~3.3GB/day and at 7d retention it does NOT fit. Keep the correction even if we raise retention back later.
+
+### Render API cheat sheet (ETH)
+
+- Service ID: `srv-d70kbdqa214c73ebrtq0` (eth-indexer, background_worker).
+- Web: `srv-d70kbdqa214c73ebrtqg` (ethscan-web).
+- DB: `dpg-d7e4b83bc2fs73ec3la0-a` (ethscan-db).
+- Retention knob: `PUT /v1/services/srv-d70kbdqa214c73ebrtq0/env-vars/RETENTION_DAYS {"value":"N"}` then `POST /v1/services/srv-d70kbdqa214c73ebrtq0/deploys {"clearCache":"do_not_clear"}`. **Always deploy after env change — mid-build env mutations are unreliable.**
+- Disk-report filter: `GET /v1/logs?ownerId=tea-d6roaibuibrs73dteu2g&resource=srv-d70kbdqa214c73ebrtq0&limit=20&direction=backward&text=disk`.
+
+---
 
 ### This session (2026-04-18 session 4)
 
