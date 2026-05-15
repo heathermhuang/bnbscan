@@ -5,6 +5,52 @@
 
 ---
 
+### This session (2026-05-15 HKT) - BNB indexer lag root cause + prod fix
+
+**User report:** "the bnbscan.com lag is big, why and how to resolve?"
+
+**Root cause:** BNB indexer was stuck retrying block `98190747` with:
+
+`invalid byte sequence for encoding "UTF8": 0x00`
+
+The bad byte came from on-chain token metadata (`name` / `symbol`) containing NUL/control characters. PostgreSQL rejects U+0000 in text/varchar columns, so one malformed token metadata fetch froze the sequential indexer. As lag grew past live `MAX_LAG_BLOCKS=5000`, the running worker auto-skipped forward, restoring visible freshness but leaving a recent gap around the poison block. After the first fix deployed, the still-unfixed worker also hit the same NUL-byte failure later at `98204021`, confirming this was not a one-off block issue.
+
+**Code shipped to `main`:**
+- `f31e95a fix(indexer): sanitize token metadata before insert`
+  - Adds `apps/indexer/src/postgres-text.ts`.
+  - Sanitizes token `name` / `symbol` before inserting into `tokens`.
+  - Adds `apps/indexer/src/postgres-text.test.ts`.
+- `575ebcb fix(indexer): cast resume gap scan bounds`
+  - Fixes the startup gap scan query with explicit `generate_series(...::bigint, ...::bigint)` casts.
+
+**Render deploys:**
+- `dep-d82ofb42m8qs73c5thl0` from `f31e95a` built and went live, but immediately failed at startup:
+  - `function generate_series(unknown, unknown) is not unique`
+  - Deactivated after follow-up deploy.
+- `dep-d82oggb7uimc73enqt9g` from `575ebcb` is live.
+  - Created `2026-05-14T08:30:57Z`, finished `2026-05-14T08:32:14Z`.
+
+**Important behavior change:** `apps/indexer/src/index.ts` now scans the last `RESUME_GAP_SCAN_BLOCKS` (default `20000`) on startup. If it finds a missing block, it resumes from the first gap and temporarily disables the `MAX_LAG_BLOCKS` skip guard until it backfills through the previous max indexed block. This is why the second deploy repaired the auto-skip gap instead of skipping it again.
+
+**Production verification:**
+- New worker detected: `Resume gap detected at block 98184040; backfilling before tip 98204040`.
+- It passed the original stuck block:
+  - `2026-05-14T09:07:23Z Indexed block 98190750`
+  - No new `invalid byte sequence` loop.
+- It later caught up fully:
+  - `2026-05-15T01:00:20Z Indexed block 98338798 (tip: 98338798, lag: 0, 7.85 blk/s)`
+  - `/api/health` at handoff: `latestBlock=98338798`, `lagSeconds=4`.
+  - RPC comparison at handoff: indexed `98338798`, chain `98338807`, `lagBlocks=9` (~0.5 min).
+
+**Local verification caveat:** `git diff --check` passed. Local `corepack pnpm --filter @bnbscan/indexer build` and `corepack pnpm exec vitest run apps/indexer/src/postgres-text.test.ts` hung in this workspace and were killed. Render built and deployed successfully, and production logs are the confidence source for this incident.
+
+**Current workspace state:** only untracked `AGENTS.md` remains; it was pre-existing/unrelated and intentionally left untouched.
+
+**Next recommended checks:**
+1. Re-check BNB `/api/health` and Render logs if lag grows again; look specifically for `invalid byte sequence`, `Block N failed`, and `Resume gap detected`.
+2. Fix local test/build hangs separately. The repo currently relies too much on production/Render as the practical build gate.
+3. Consider adding a public/internal gap metric so `MAX(blocks.number)` cannot hide skipped ranges after future auto-skips.
+
 ### This session (2026-04-19 session 5) — ethscan-db disk alert
 
 **Alert:** PostgreSQL database `ethscan-db` using more than 90% of 30GB.
