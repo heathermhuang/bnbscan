@@ -91,7 +91,10 @@ export type ClaimedEntity = {
  *   ahead of recently-touched rows but behind fresh 'pending' NULLs — R6
  *   deliberately lifts only 'partial'.
  * - Errored rows re-enter after an exponential cooldown capped at 1800s,
- *   mirroring backoffMs().
+ *   mirroring backoffMs(). The EXPONENT is capped too (2^11 = 2048 already
+ *   exceeds the cap): pow() is evaluated before LEAST, float8 overflows at
+ *   2^1024, and Postgres then fails the whole claim SELECT — one row that had
+ *   failed 1024 times stalled every entity on ETH for eight days (2026-08-30).
  * - `excludeTypes` makes bucket politeness part of ELIGIBILITY: a hot bucket's
  *   entities are simply not claimable, so its `partial` rows (which outrank
  *   every `pending` row) cannot starve the other bucket's work by being
@@ -110,7 +113,7 @@ export function buildClaimSql(
       SELECT id FROM backfill_watermarks
       WHERE (status IN ('pending','partial')
          OR (status = 'running' AND last_attempt_at < now() - (${cfg.leaseSec} * INTERVAL '1 second'))
-         OR (status = 'error' AND (last_attempt_at IS NULL OR last_attempt_at < now() - (LEAST(pow(2, attempts), 1800) * INTERVAL '1 second'))))${exclude}
+         OR (status = 'error' AND (last_attempt_at IS NULL OR last_attempt_at < now() - (LEAST(pow(2, LEAST(attempts, 11)), 1800) * INTERVAL '1 second'))))${exclude}
       ORDER BY (status = 'partial') DESC, last_attempt_at ASC NULLS FIRST, created_at ASC
       LIMIT 1
       FOR UPDATE SKIP LOCKED
