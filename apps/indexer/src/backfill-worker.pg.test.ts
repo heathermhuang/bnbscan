@@ -208,6 +208,27 @@ describe.skipIf(!PG_URL)('backfill claim — real Postgres', () => {
     expect(claimed!.entity_id).toBe('0x' + 'd'.repeat(40))
   })
 
+  // pow(2, attempts) is evaluated BEFORE LEAST caps it, and float8 overflows at
+  // 2^1024 — Postgres raises "value out of range: overflow" for the whole claim
+  // SELECT, so ONE row that has failed 1024+ times stalls every entity. Prod ETH
+  // sat in exactly that 15s retry loop from ~2026-08-30 to 09-07. The cooldown
+  // must saturate at its cap for any attempts, and the other rows must still claim.
+  it('a row with 1024+ attempts neither errors the claim nor blocks other rows', async () => {
+    await seed({ entity: '0x' + 'e'.repeat(40), status: 'error', attempts: 2000, attemptAgoSec: 0 })
+    await seed({ entity: '0x' + 'f'.repeat(40), status: 'pending' })
+    // The fresh pending row is claimable — the poisoned row must not throw.
+    const first = await claimNextEntity(db)
+    expect(first?.entity_id).toBe('0x' + 'f'.repeat(40))
+    // Inside the capped 1800s cooldown: not claimable. Past it: claimable.
+    expect(await claimNextEntity(db)).toBeNull()
+    await raw.unsafe(`
+      UPDATE backfill_watermarks
+      SET last_attempt_at = now() - interval '1801 seconds'
+      WHERE entity_id = '0x${'e'.repeat(40)}'`)
+    const second = await claimNextEntity(db)
+    expect(second?.entity_id).toBe('0x' + 'e'.repeat(40))
+  })
+
   it('releaseClaim hands a running row back to pending/partial, and only a running row', async () => {
     await seed({ status: 'pending' })
     const claimed = (await claimNextEntity(db))!

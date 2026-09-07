@@ -42,7 +42,7 @@ describe('buildClaimSql — the shipped claim statement', () => {
 
   it('errored rows wait out an exponential cooldown capped at 1800s', () => {
     expect(text).toContain(
-      `(status = 'error' AND (last_attempt_at IS NULL OR last_attempt_at < now() - (LEAST(pow(2, attempts), 1800) * INTERVAL '1 second')))`,
+      `(status = 'error' AND (last_attempt_at IS NULL OR last_attempt_at < now() - (LEAST(pow(2, LEAST(attempts, 11)), 1800) * INTERVAL '1 second')))`,
     )
   })
 
