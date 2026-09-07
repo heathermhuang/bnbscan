@@ -4,6 +4,7 @@ import { readIndexerConfig, formatResolvedConfig, redact, type ConfigDefaults } 
 const DEFAULTS: ConfigDefaults = {
   startBlock: 38_000_000,
   concurrency: 8,
+  internalTxPartitionBlocks: 96_000,
 }
 
 const read = (env: NodeJS.ProcessEnv = {}) => readIndexerConfig(env, DEFAULTS)

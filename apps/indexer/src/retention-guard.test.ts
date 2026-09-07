@@ -33,6 +33,7 @@ const BACKFILL_TABLES = [
 
 const ALLOWED = [
   'dex_trades', 'token_transfers', 'transactions', 'gas_history', 'blocks', 'logs', 'token_balances',
+  'internal_transactions',
 ] as const
 
 describe('tableIdent — whitelisted base tables only, unqualified (search_path)', () => {
@@ -82,10 +83,15 @@ describe('partitionIdent — token_transfers child partitions, schema-qualified'
     }
   })
 
-  it('rejects a non-token_transfers base table (no prefix)', () => {
-    for (const t of ['transactions', 'blocks', 'token_transfers']) {
+  it('rejects a partitioned parent itself (no prefix) — only children may be dropped', () => {
+    for (const t of ['transactions', 'blocks', 'token_transfers', 'internal_transactions']) {
       expect(() => partitionIdent(t, 'public'), t).toThrow(/partition/i)
     }
+  })
+
+  it('accepts internal_transactions children with the same schema qualification', () => {
+    const id = partitionIdent('internal_transactions_p_25920000', 'public')
+    expect(renderIdent(id)).toBe('"public"."internal_transactions_p_25920000"')
   })
 
   it('rejects injection-shaped partition names', () => {

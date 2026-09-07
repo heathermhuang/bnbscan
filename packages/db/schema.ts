@@ -95,6 +95,30 @@ export const tokenTransfers = pgTable('token_transfers', {
   txIdx:        index('tt_tx_idx').on(t.txHash),
 }))
 
+export const internalTransactions = pgTable('internal_transactions', {
+  // Value moved by contract code (call / callcode / create / create2 /
+  // selfdestruct frames with a non-zero value) — the Etherscan "Internal Txns"
+  // set, NOT the full call tree. RANGE-partitioned by block_number from day one
+  // on both chains and pruned by DROP PARTITION; no surrogate id, for the same
+  // reason token_transfers has none. ensure-schema.ts is the runtime DDL authority.
+  txHash:       varchar('tx_hash', { length: 66 }).notNull(),
+  // Dotted child-index path from the outer call ('0', '0.0.0'). With tx_hash and
+  // the partition key this is the natural key that makes a replay a no-op.
+  traceAddress: varchar('trace_address', { length: 128 }).notNull(),
+  fromAddress:  varchar('from_address', { length: 42 }).notNull(),
+  toAddress:    varchar('to_address', { length: 42 }),
+  value:        numeric('value', { precision: 78, scale: 0 }).notNull(),
+  callType:     varchar('call_type', { length: 12 }).notNull(),
+  blockNumber:  bigint('block_number', { mode: 'number' }).notNull(),
+  timestamp:    timestamp('timestamp', { withTimezone: true }).notNull(),
+}, (t) => ({
+  txIdx:        index('itx_tx_idx').on(t.txHash),
+  fromTsIdx:    index('itx_from_ts_idx').on(t.fromAddress, t.timestamp),
+  toTsIdx:      index('itx_to_ts_idx').on(t.toAddress, t.timestamp),
+  replayKey:    unique('internal_transactions_block_number_tx_hash_trace_address_key')
+                  .on(t.blockNumber, t.txHash, t.traceAddress),
+}))
+
 export const tokens = pgTable('tokens', {
   address:      varchar('address', { length: 42 }).primaryKey(),
   name:         varchar('name', { length: 255 }).notNull(),

@@ -40,7 +40,7 @@ export const BODY_PRUNE_OPS: PruneOp[] = [
 // Pruned ONLY under a finite COMPACT_RETENTION_DAYS. Order = FK-safe delete order
 // (transactions before blocks; token_transfers has no blocks FK). token_transfers
 // is dropped by partition when partitioned — the caller special-cases that.
-export const COMPACT_PRUNE_TABLES = ['token_transfers', 'transactions', 'blocks'] as const
+export const COMPACT_PRUNE_TABLES = ['token_transfers', 'internal_transactions', 'transactions', 'blocks'] as const
 
 /** Key / index columns a null-column op must never touch. */
 export const PROTECTED_COLUMNS = new Set([

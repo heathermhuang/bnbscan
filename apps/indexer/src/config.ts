@@ -210,6 +210,8 @@ export type ConfigDefaults = {
   startBlock: number
   /** BNB produces a block every 3s and needs more workers than ETH at 12s. */
   concurrency: number
+  /** internal_transactions partition width; a fraction of the retention window on each chain. */
+  internalTxPartitionBlocks: number
 }
 
 /** @param env process.env, or a fixture. Pure with respect to it. */
@@ -332,6 +334,27 @@ export function readIndexerConfig(
     confirmMigration: r.enabledOnlyWhenOne('CONFIRM_PARTITION_MIGRATION'),
   }
 
+  const internalTx = {
+    /**
+     * OFF unless INTERNAL_TX_ENABLED=1, and inert without TRACE_RPC_URL (the
+     * block endpoints cannot trace — probed 2026-09-03/07, both chains). ETH
+     * additionally needs the disk grown first: at 3-day retention the table is
+     * ~14 GiB on a 49 GiB volume already 69% full.
+     */
+    enabled: r.enabledOnlyWhenOne('INTERNAL_TX_ENABLED'),
+    /**
+     * Blocks are traced only while the indexer is within this many blocks of the
+     * tip. Catch-up throughput on BNB is the documented failure mode, so a lag
+     * excursion must not also pay a trace per block; blocks indexed while behind
+     * simply have no internal transactions.
+     */
+    maxLag: r.int('INTERNAL_TX_MAX_LAG', 500, { min: 0 }),
+    partitions: {
+      blocks: r.int('INTERNAL_TX_PARTITION_BLOCKS', defaults.internalTxPartitionBlocks, { min: 1 }),
+      ahead: r.int('INTERNAL_TX_PARTITION_AHEAD', 7, { min: 1 }),
+    },
+  }
+
   const backfill = {
     pollMs: r.int('BACKFILL_POLL_MS', 15_000, { min: 1 }),
     pageSleepMs: r.int('BACKFILL_PAGE_SLEEP_MS', 2_000, { min: 1 }),
@@ -356,7 +379,7 @@ export function readIndexerConfig(
 
   const config = {
     indexing, rpc, reorg, gapHeal, transferWriter, holders,
-    retention, partitions, backfill, verifier, runtime,
+    retention, partitions, internalTx, backfill, verifier, runtime,
 
     /**
      * Per-block holder-balance tracking.

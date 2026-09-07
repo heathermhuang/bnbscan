@@ -77,6 +77,40 @@ export async function ensureSchema(): Promise<void> {
     )
   `))
 
+  // internal_transactions is RANGE-partitioned by block_number from its FIRST row,
+  // on both chains. It is sized like token_transfers (measured 2026-09-07 at
+  // 0.87× of it on ETH, 0.23× on BSC) and the only retention that hands disk back
+  // to the OS is DROP PARTITION — the `addresses` table is what unbounded growth
+  // looks like. The unique carries the partition key, which is the one shape a
+  // partitioned table can enforce; with onConflictDoNothing() a replay is a no-op,
+  // and the outgoing deploy generation never writes here so it cannot collide.
+  // No surrogate id: token_transfers' int4 sequence overflowed on BNB once.
+  await db.execute(sql.raw(`
+    CREATE TABLE IF NOT EXISTS internal_transactions (
+      tx_hash       VARCHAR(66) NOT NULL,
+      trace_address VARCHAR(128) NOT NULL,
+      from_address  VARCHAR(42) NOT NULL,
+      to_address    VARCHAR(42),
+      value         NUMERIC(78,0) NOT NULL,
+      call_type     VARCHAR(12) NOT NULL,
+      block_number  BIGINT NOT NULL,
+      timestamp     TIMESTAMPTZ NOT NULL,
+      UNIQUE (block_number, tx_hash, trace_address)
+    ) PARTITION BY RANGE (block_number)
+  `))
+  // Parent indexes: every partition ensureInternalTxPartitions creates inherits
+  // them. Existence-checked first — CREATE INDEX IF NOT EXISTS on a partitioned
+  // parent still takes a lock on every child even when it is a no-op, the same
+  // trap addColumnIfMissing avoids.
+  for (const [name, columns] of [
+    ['itx_tx_idx', 'tx_hash'],
+    ['itx_from_ts_idx', 'from_address, timestamp DESC'],
+    ['itx_to_ts_idx', 'to_address, timestamp DESC'],
+  ] as const) {
+    if (await relationExists(name)) continue
+    await db.execute(sql.raw(`CREATE INDEX IF NOT EXISTS ${name} ON internal_transactions (${columns})`))
+  }
+
   await db.execute(sql.raw(`
     CREATE TABLE IF NOT EXISTS tokens (
       address      VARCHAR(42) PRIMARY KEY,
@@ -800,12 +834,29 @@ export async function isPartitioned(table: string): Promise<boolean> {
   return Array.from(res).length > 0
 }
 
+/** Tables that are RANGE-partitioned by block_number and pruned by DROP PARTITION. */
+export type PartitionedParent = 'token_transfers' | 'internal_transactions'
+
+/** True if a relation of that name (table or index) resolves via search_path. */
+async function relationExists(name: string): Promise<boolean> {
+  const res = await getDb().execute(sql`SELECT to_regclass(${name}) IS NOT NULL AS present`)
+  return (Array.from(res)[0] as { present?: boolean } | undefined)?.present === true
+}
+
 /**
  * List token_transfers RANGE partitions as { name, lo, hi } (block_number bounds),
  * sorted ascending. Skips a DEFAULT partition (no FROM..TO). Used by both forward-
  * partition creation and DROP-PARTITION retention.
  */
 export async function listTokenTransferPartitions(
+  db: ReturnType<typeof getDb> = getDb(),
+): Promise<Array<{ name: string; schema: string; lo: number; hi: number }>> {
+  return listPartitions('token_transfers', db)
+}
+
+/** The same listing for any partitioned parent. Missing parent → []. */
+export async function listPartitions(
+  parent: PartitionedParent,
   db: ReturnType<typeof getDb> = getDb(),
 ): Promise<Array<{ name: string; schema: string; lo: number; hi: number }>> {
   // Return each child's schema (nspname) alongside its name: retention discovers
@@ -816,7 +867,7 @@ export async function listTokenTransferPartitions(
     FROM pg_inherits i
     JOIN pg_class c ON c.oid = i.inhrelid
     JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE i.inhparent = 'token_transfers'::regclass
+    WHERE i.inhparent = to_regclass(${parent})
   `)
   const out: Array<{ name: string; schema: string; lo: number; hi: number }> = []
   for (const row of Array.from(res) as Array<Record<string, unknown>>) {
@@ -950,4 +1001,77 @@ export async function ensureForwardPartitions(): Promise<void> {
     upper = hi
   }
   if (created > 0) console.log(`[indexer] ensured ${created} forward token_transfers partition(s) up to block ${upper}`)
+}
+
+/**
+ * Pure. The `[lo, hi)` ranges to CREATE so that partitions cover every block in
+ * `[fromBlock, toBlock]`, given what already exists. Width-aligned when starting
+ * fresh — and starting fresh means starting at `fromBlock`, never at 0: a ladder
+ * seeded from genesis would be tens of thousands of empty tables. An existing
+ * partition is never straddled, whatever its alignment; the ladder resumes at its
+ * upper bound.
+ */
+export function partitionRangesToCreate(
+  existing: readonly { lo: number; hi: number }[],
+  width: number,
+  fromBlock: number,
+  toBlock: number,
+): Array<{ lo: number; hi: number }> {
+  const covering = (block: number) => existing.find(p => p.lo <= block && block < p.hi)
+  const out: Array<{ lo: number; hi: number }> = []
+  let cursor = Math.floor(fromBlock / width) * width
+  // Bounded so a bad width can never spin forever.
+  for (let guard = 0; cursor <= toBlock && guard < 10_000; guard++) {
+    const hit = covering(cursor)
+    if (hit) { cursor = hit.hi; continue }
+    // Stop short of the next existing partition rather than overlap it.
+    const next = existing.filter(p => p.lo > cursor).reduce<number | null>((m, p) => m === null || p.lo < m ? p.lo : m, null)
+    const hi = next !== null && next < cursor + width ? next : cursor + width
+    out.push({ lo: cursor, hi })
+    cursor = hi
+  }
+  return out
+}
+
+/**
+ * Keep internal_transactions partitioned INTERNAL_TX_PARTITION_AHEAD widths past
+ * the chain position, seeding the ladder on first run. No-op while the feature is
+ * off, so OFF leaves no footprint.
+ *
+ * `anchorBlock` is the block the indexer is about to write. index.ts passes the
+ * resolved resume block at boot; the retention interval passes nothing and the
+ * position is read from `blocks`. It is NOT read from `blocks` at boot: on a fresh
+ * database that table is empty, and the first boot ritual of this code seeded
+ * `internal_transactions_p_0 … p_50400` — a ladder at genesis — exactly the way.
+ * With nothing to anchor on, do nothing; the writer degrades (warns, skips the
+ * block's rows) rather than failing a block if a range is ever missing.
+ */
+export async function ensureInternalTxPartitions(anchorBlock?: number): Promise<void> {
+  if (!indexerConfig.internalTx.enabled) return
+  const db = getDb()
+  const { blocks: width, ahead } = indexerConfig.internalTx.partitions
+  let fromBlock = anchorBlock ?? 0
+  if (!fromBlock) {
+    const maxRow = await db.execute(sql`SELECT COALESCE(MAX(number), 0)::bigint AS m FROM blocks`)
+    fromBlock = Number((Array.from(maxRow)[0] as Record<string, unknown>).m) || 0
+  }
+  if (!fromBlock) return
+  const existing = await listPartitions('internal_transactions', db)
+  const ranges = partitionRangesToCreate(existing, width, fromBlock, fromBlock + ahead * width)
+  let created = 0
+  for (const { lo, hi } of ranges) {
+    const name = `internal_transactions_p_${lo}`
+    try {
+      await db.execute(sql.raw(
+        `CREATE TABLE IF NOT EXISTS ${name} PARTITION OF internal_transactions FOR VALUES FROM (${lo}) TO (${hi})`,
+      ))
+      created++
+    } catch (err) {
+      console.warn(`[indexer] internal_transactions partition ${name} warning:`, err instanceof Error ? err.message : err)
+      break
+    }
+  }
+  if (created > 0) {
+    console.log(`[indexer] ensured ${created} internal_transactions partition(s) up to block ${ranges[ranges.length - 1].hi}`)
+  }
 }

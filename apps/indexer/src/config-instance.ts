@@ -20,6 +20,11 @@ const resolved = readIndexerConfig(process.env, {
   startBlock: chain.defaultStartBlock,
   // BNB produces a block every 3s and needs the workers; ETH at 12s can run lower.
   concurrency: chain.key === 'bnb' ? 8 : 4,
+  // ~half a day of BSC blocks (the deployed PARTITION_BLOCKS) / ~one day of ETH
+  // blocks. The 192_000 token_transfers default is 27 days on ETH — wider than
+  // the retention window, so every partition would straddle the cutoff and
+  // retention would never drop one.
+  internalTxPartitionBlocks: chain.key === 'bnb' ? 96_000 : 7_200,
 })
 
 export const indexerConfig = resolved.config

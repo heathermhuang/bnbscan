@@ -5,6 +5,7 @@ import {
   TT_TOKEN_TS_COLUMNS,
   TT_TOKEN_TS_IDX,
   INVALID_INDEX_SWEEP_SQL,
+  partitionRangesToCreate,
 } from './ensure-schema'
 import { BODY_PRUNE_OPS, type PruneOp } from './retention-policy'
 import { getChainConfig, type ChainKey } from '@altscan/chain-config'
@@ -204,5 +205,41 @@ describe('tx_whale_value_idx', () => {
       .toThrow(/must be digits/)
     expect(() => buildConcurrentIndexList(false, '1e18')).toThrow(/must be digits/)
     expect(() => buildConcurrentIndexList(false, '')).toThrow(/must be digits/)
+  })
+})
+
+describe('partitionRangesToCreate — the ladder for a table partitioned from day one', () => {
+  const W = 7_200
+
+  it('seeds an EMPTY ladder at the current block, never from block 0', () => {
+    const ranges = partitionRangesToCreate([], W, 25_922_443, 25_922_443 + 2 * W)
+    expect(ranges[0].lo).toBe(Math.floor(25_922_443 / W) * W)
+    expect(ranges[0].lo).toBeLessThanOrEqual(25_922_443)
+    expect(ranges[0].lo).toBeGreaterThan(0)
+    // Contiguous, width-aligned, and reaching past the target.
+    for (let i = 1; i < ranges.length; i++) expect(ranges[i].lo).toBe(ranges[i - 1].hi)
+    for (const r of ranges) { expect(r.hi - r.lo).toBe(W); expect(r.lo % W).toBe(0) }
+    expect(ranges[ranges.length - 1].hi).toBeGreaterThan(25_922_443 + 2 * W)
+  })
+
+  it('only fills the ranges an existing ladder does not already cover', () => {
+    const existing = [{ lo: 100 * W, hi: 101 * W }, { lo: 101 * W, hi: 102 * W }]
+    const ranges = partitionRangesToCreate(existing, W, 100 * W + 5, 103 * W + 5)
+    expect(ranges).toEqual([{ lo: 102 * W, hi: 103 * W }, { lo: 103 * W, hi: 104 * W }])
+  })
+
+  it('is idempotent: applying its own output leaves nothing to create', () => {
+    const first = partitionRangesToCreate([], W, 50 * W + 1, 53 * W)
+    expect(first.length).toBeGreaterThan(0)
+    expect(partitionRangesToCreate(first, W, 50 * W + 1, 53 * W)).toEqual([])
+  })
+
+  it('never proposes a range overlapping a wider, differently-aligned existing partition', () => {
+    // A hand-made or legacy partition that is not width-aligned must be respected,
+    // not straddled: overlapping ranges are a CREATE TABLE error at best.
+    const existing = [{ lo: 0, hi: 100 * W + 3_000 }]
+    const ranges = partitionRangesToCreate(existing, W, 100 * W, 102 * W)
+    for (const r of ranges) expect(r.lo).toBeGreaterThanOrEqual(100 * W + 3_000)
+    expect(ranges[0]).toEqual({ lo: 100 * W + 3_000, hi: 100 * W + 3_000 + W })
   })
 })
