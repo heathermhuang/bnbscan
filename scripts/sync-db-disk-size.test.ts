@@ -88,14 +88,14 @@ describe('parseTargets', () => {
 })
 
 describe('readServiceEnv — the fail-closed service/database binding check', () => {
-  const PG = 'dpg-d7e4b83bc2fs73ec3l9g-a'
+  const PG = 'dpg-abc123-a'
   const url = (host: string) => `postgres://u:p@${host}.oregon-postgres.render.com/db`
   const wrap = (pairs: Record<string, string>) =>
     Object.entries(pairs).map(([key, value]) => ({ envVar: { key, value } }))
 
   it('binds when a DATABASE_URL points at the measured database', () => {
     const { diskGb, bound } = readServiceEnv(
-      wrap({ DB_DISK_GB: '150', DATABASE_URL: url('dpg-d7e4b83bc2fs73ec3l9g') }),
+      wrap({ DB_DISK_GB: '150', DATABASE_URL: url('dpg-abc123') }),
       PG,
     )
     expect(bound).toBe(true)
@@ -104,7 +104,7 @@ describe('readServiceEnv — the fail-closed service/database binding check', ()
 
   it('binds on a chain-prefixed key too — ETH uses ETH_DATABASE_URL, not DATABASE_URL', () => {
     expect(
-      readServiceEnv(wrap({ ETH_DATABASE_URL: url('dpg-d7e4b83bc2fs73ec3l9g') }), PG).bound,
+      readServiceEnv(wrap({ ETH_DATABASE_URL: url('dpg-abc123') }), PG).bound,
     ).toBe(true)
   })
 
@@ -126,7 +126,7 @@ describe('readServiceEnv — the fail-closed service/database binding check', ()
   })
 
   it('reports DB_DISK_GB as NaN when absent, which the planner treats as fixable', () => {
-    expect(readServiceEnv(wrap({ DATABASE_URL: url('dpg-d7e4b83bc2fs73ec3l9g') }), PG).diskGb).toBeNaN()
+    expect(readServiceEnv(wrap({ DATABASE_URL: url('dpg-abc123') }), PG).diskGb).toBeNaN()
   })
 })
 
@@ -179,7 +179,7 @@ describe('redactIds', () => {
     expect(redactIds('PUT /services/srv-abc123/env-vars/DB_DISK_GB')).toBe(
       'PUT /services/<srv-id>/env-vars/DB_DISK_GB',
     )
-    expect(redactIds('dpg-d7e4b83bc2fs73ec3l9g-a and dep-xyz789')).toBe('<dpg-id> and <dep-id>')
+    expect(redactIds('dpg-abc123-a and dep-xyz789')).toBe('<dpg-id> and <dep-id>')
   })
 
   it('leaves ordinary text alone', () => {
