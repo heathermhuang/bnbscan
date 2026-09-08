@@ -1,5 +1,6 @@
 {
   "name": "altscan",
+  "license": "AGPL-3.0-only",
   "private": true,
   "scripts": {
     "dev": "turbo run dev",
