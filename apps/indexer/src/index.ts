@@ -37,12 +37,12 @@ import {
   PoisonBlockTracker, shouldQuarantine, poisonGapReason,
 } from './poison-block'
 import { healNextGap } from './gap-healer'
-import { RPC_URLS as SHARED_RPC_URLS, safeRpcError } from './provider'
+import { RPC_URLS as SHARED_RPC_URLS, TRACE_RPC_URLS, safeRpcError } from './provider'
 import { detectReorgPinned, makeReorgDepsFrom, resolveReorgDepth, unwindFrom } from './reorg-handler'
 import { syncValidators } from './validator-syncer'
 import { startRetentionCleanup, reportIndexerLag } from './retention-cleanup'
 import { startBackfillWorker } from './backfill-worker'
-import { ensureSchema } from './ensure-schema'
+import { ensureSchema, ensureInternalTxPartitions } from './ensure-schema'
 import { getDb, schema } from './db'
 import { desc, sql } from 'drizzle-orm'
 
@@ -141,6 +141,23 @@ async function main() {
   const providers = RPC_URLS.map(url =>
     new JsonRpcProvider(url, network, { staticNetwork: network })
   )
+  // Internal transactions come from a SEPARATE trace endpoint (none of the block
+  // endpoints can trace) and are gated on lag at the call site, so catch-up —
+  // BNB's documented failure mode — never pays a trace per block.
+  const itx = indexerConfig.internalTx
+  const traceUrl = TRACE_RPC_URLS[0]
+  // batchMaxCount 1: ethers batches concurrent send()s into one JSON-RPC array,
+  // and providers reject or throttle batches of ~2MB trace responses (the first
+  // boot ritual of this code got every trace refused as an over-size batch).
+  const traceProvider = itx.enabled && traceUrl
+    ? new JsonRpcProvider(traceUrl, network, { staticNetwork: network, batchMaxCount: 1 })
+    : null
+  if (itx.enabled && !traceUrl) {
+    console.warn(`${TAG} INTERNAL_TX_ENABLED=1 but TRACE_RPC_URL is unset — internal transactions OFF`)
+  }
+  console.log(
+    `${TAG} internal transactions ${traceProvider ? `ON (${redactRpcUrl(traceUrl)}, traced within ${itx.maxLag} blocks of tip)` : 'OFF'}`,
+  )
   // Endpoint identity for failover logging. Zipped by index — `providers` is
   // built 1:1 from RPC_URLS directly above, so the indices cannot drift.
   const urlLabelOf = new Map(providers.map((p, i) => [p, redactRpcUrl(RPC_URLS[i])]))
@@ -235,6 +252,12 @@ async function main() {
     resumeGapBackfillUntil = resume.backfillUntil
     console.log(`${TAG} Resuming from block ${lastIndexed + 1} (tip: ${tip})`)
   }
+
+  // Seed the internal_transactions partition ladder from the block about to be
+  // written — not from `blocks` (empty on a fresh database) and not from
+  // startBlock (0 on ETH). No-op unless internal transactions are enabled.
+  await ensureInternalTxPartitions(lastIndexed + 1).catch(err =>
+    console.warn(`${TAG} ensureInternalTxPartitions warning:`, safeErr(err)))
 
   // Sync validators only for chains that have them (BNB)
   if (chain.features.hasValidators) {
@@ -670,7 +693,7 @@ async function main() {
                 blockNum,
                 providers,
                 workerId,
-                (b, p, onSideEffect) => processBlock(b, p, false, onSideEffect),
+                (b, p, onSideEffect) => processBlock(b, p, false, onSideEffect, latest - b <= itx.maxLag ? traceProvider : null),
                 reportFailover,
                 endpointHealth,
               )

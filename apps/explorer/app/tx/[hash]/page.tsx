@@ -257,6 +257,19 @@ function formatUsd(nativeAmount: number, price: number): string {
   return `$${usd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
+/** Execution order. '0.10' sorts after '0.2' numerically, not as a string. */
+function sortByTraceAddress<T extends { traceAddress: string }>(rows: T[]): T[] {
+  const key = (r: T) => r.traceAddress.split('.').map(Number)
+  return [...rows].sort((a, b) => {
+    const ka = key(a), kb = key(b)
+    for (let i = 0; i < Math.max(ka.length, kb.length); i++) {
+      const d = (ka[i] ?? -1) - (kb[i] ?? -1)
+      if (d !== 0) return d
+    }
+    return 0
+  })
+}
+
 export default async function TxDetailPage({
   params,
 }: {
@@ -274,13 +287,18 @@ export default async function TxDetailPage({
 
   // token_transfers is compact-immortal → still local even for a pruned tx.
   // logs are a prunable body → local when present, else from the refetched body.
-  const [dbLogs, transfers, methodName, nativePrice, chainTip] = await Promise.all([
+  const [dbLogs, transfers, internalTxs, methodName, nativePrice, chainTip] = await Promise.all([
     (fromRpc || bodyPruned)
       ? Promise.resolve([])
       : db.select().from(schema.logs).where(eq(schema.logs.txHash, hash)).limit(50).catch(swallowed('tx/logs', [])),
     fromRpc
       ? Promise.resolve([])
       : db.select().from(schema.tokenTransfers).where(eq(schema.tokenTransfers.txHash, hash)).limit(25).catch(swallowed('tx/transfers', [])),
+    // Local only: there is no RPC fallback for traces on the web tier. A tx
+    // indexed before the feature (or while the indexer was behind) has none.
+    fromRpc
+      ? Promise.resolve([])
+      : db.select().from(schema.internalTransactions).where(eq(schema.internalTransactions.txHash, hash)).limit(100).catch(swallowed('tx/internal', [])),
     tx.methodId && tx.methodId !== '0x'
       ? resolveMethodName(tx.methodId)
       : Promise.resolve(null),
@@ -616,6 +634,30 @@ export default async function TxDetailPage({
               )}
             </div>
           </details>
+        </div>
+      )}
+
+      {internalTxs.length > 0 && (
+        <div className="bg-white rounded-xl border shadow-sm mb-6 p-4">
+          <h2 className="font-semibold mb-3">Internal Transactions ({internalTxs.length})</h2>
+          <div className="space-y-2">
+            {sortByTraceAddress(internalTxs).map((it) => (
+              <div key={it.traceAddress} className="flex flex-wrap items-center gap-2 text-sm">
+                <Badge variant="default">{it.callType}</Badge>
+                <span className="text-gray-500">From</span>
+                <AddressLink address={it.fromAddress} className="text-xs" />
+                <span className="text-gray-500">To</span>
+                {it.toAddress
+                  ? <AddressLink address={it.toAddress} className="text-xs" />
+                  : <span className="text-xs text-gray-400">(contract creation)</span>}
+                <span className="text-gray-500">For</span>
+                <span className="font-medium">{formatNativeToken(safeBigInt(it.value))} {chainConfig.currency}</span>
+              </div>
+            ))}
+          </div>
+          <p className="mt-3 text-xs text-gray-500">
+            Value-moving calls, contract creations and self-destructs decoded from execution traces. Zero-value calls are not listed.
+          </p>
         </div>
       )}
 

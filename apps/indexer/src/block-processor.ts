@@ -4,8 +4,9 @@ import { sql } from 'drizzle-orm'
 import { getDb, getWriterDb, schema } from './db'
 import { withTimeout } from './rpc-failover'
 import { notifyWebhooks } from './webhook-notifier'
-import { getProvider } from './provider'
+import { getProvider, safeRpcError } from './provider'
 import { sanitizeTokenMetadata } from './postgres-text'
+import { fetchBlockTraces, decodeCallTracerBlock, type RawTraceTx } from './internal-tx'
 
 // ── Topic signatures ────────────────────────────────────────────────
 const TRANSFER_TOPIC = keccak256id('Transfer(address,address,uint256)')
@@ -285,11 +286,29 @@ export function assertReceiptCoverage(
   }
 }
 
+// Internal-transaction failures are reported, never thrown: the trace endpoint is
+// a second provider that is not in the failover pool, so a throw would retry the
+// same dead endpoint from every block provider and stall indexing for a secondary
+// table. First failure reports immediately; then at most once a minute with the
+// count accumulated since, so a sick endpoint cannot bury the progress line.
+let itxProblemsSinceReport = 0
+let itxLastReportAt = 0
+function reportInternalTxProblem(phase: 'trace' | 'insert', blockNumber: number, err: unknown): void {
+  itxProblemsSinceReport++
+  const now = Date.now()
+  if (itxLastReportAt !== 0 && now - itxLastReportAt < 60_000) return
+  console.warn(`[internal-tx] ${phase} failed at block ${blockNumber} (${itxProblemsSinceReport} since last report): ${safeRpcError(err)}`)
+  itxProblemsSinceReport = 0
+  itxLastReportAt = now
+}
+
 export async function processBlock(
   blockNumber: number,
   provider: JsonRpcProvider,
   skipLogs = false,
   onWritesBegan?: () => void,
+  /** When given, the block is traced on THIS provider and its internal transactions stored. */
+  traceProvider: JsonRpcProvider | null = null,
 ) {
   const t: PhaseTimings | null = PROFILE_ENABLED ? newTimings() : null
   const blockStart = PROFILE_ENABLED ? performance.now() : 0
@@ -315,8 +334,14 @@ export async function processBlock(
   // Placed HERE, strictly above the first write (onWritesBegan below), so a
   // timeout can only ever abandon pure reads — rpc-failover then retries the
   // block on another endpoint with no risk of a half-written replay.
-  const [block, receipts] = await withTimeout(
-    Promise.all([blockPromise, receiptsPromise]),
+  // Traces ride in the same pure-read phase, in parallel (measured 0.6-0.8s median
+  // per block on both chains, inside the 8s ceiling). Soft: a failure yields null
+  // and is reported, so the block still lands — see reportInternalTxProblem.
+  const tracesPromise: Promise<RawTraceTx[] | null> = traceProvider
+    ? fetchBlockTraces(traceProvider, blockNumber).catch(err => { reportInternalTxProblem('trace', blockNumber, err); return null })
+    : Promise.resolve(null)
+  const [block, receipts, rawTraces] = await withTimeout(
+    Promise.all([blockPromise, receiptsPromise, tracesPromise]),
     RPC_FETCH_TIMEOUT_MS,
     `block ${blockNumber} acquisition`,
   )
@@ -405,6 +430,23 @@ export async function processBlock(
       // Keeps hot-path block time bounded; the `addresses` table is metadata
       // (tx_count / last_seen), eventual consistency across a few seconds is fine.
       enqueueAddressActivity(insertedAddrs, timestamp)
+    }
+  }
+
+  // ── 2b. Internal transactions (traces already awaited above) ───
+  // Natural key (block_number, tx_hash, trace_address) + onConflictDoNothing:
+  // a replay is a no-op, never a duplicate. Degrades rather than throws — writes
+  // have begun, and a throw here would hand a partially persisted block to the
+  // poison path over a secondary table.
+  if (rawTraces) {
+    const itxRows = decodeCallTracerBlock(rawTraces, blockNumber, timestamp)
+    for (let i = 0; i < itxRows.length; i += SQL_BATCH_CHUNK) {
+      try {
+        await db.insert(schema.internalTransactions).values(itxRows.slice(i, i + SQL_BATCH_CHUNK)).onConflictDoNothing()
+      } catch (err) {
+        reportInternalTxProblem('insert', blockNumber, err)
+        break
+      }
     }
   }
 

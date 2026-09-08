@@ -11,7 +11,7 @@
 import { indexerConfig } from './config-instance'
 import { getMaintenanceDb } from './db'
 import { sql, type SQL } from 'drizzle-orm'
-import { isPartitioned, listTokenTransferPartitions, ensureForwardPartitions } from './ensure-schema'
+import { isPartitioned, listPartitions, ensureForwardPartitions, ensureInternalTxPartitions, type PartitionedParent } from './ensure-schema'
 import { buildRetentionPlan, parseCompactRetentionDays } from './retention-policy'
 
 const RETENTION_DAYS = indexerConfig.retention.days
@@ -93,6 +93,9 @@ export function reportIndexerLag(lag: number): void {
  */
 const ALLOWED_TABLES = [
   'dex_trades', 'token_transfers', 'transactions', 'gas_history', 'blocks', 'logs', 'token_balances',
+  // Partitioned from day one on both chains; pruned by DROP PARTITION only, but
+  // named here so the whitelist and partitionIdent agree on what may be dropped.
+  'internal_transactions',
   // Webhook delivery ledger. Prunable because a delivery record is only useful
   // while replaying that block is still possible, and it holds no index data —
   // but it must be named here as well as in BODY_PRUNE_OPS or this second gate
@@ -169,8 +172,8 @@ function assertSchemaShape(schema: string): void {
  * relation that was discovered, not whatever `search_path` resolves the bare name to.
  */
 function partitionIdent(name: string, schema: string): SafeIdent {
-  if (!/^token_transfers_[a-z0-9_]+$/.test(name)) {
-    throw new Error(`[retention] Refused partition identifier: "${name}" — not a token_transfers partition`)
+  if (!/^(token_transfers|internal_transactions)_[a-z0-9_]+$/.test(name)) {
+    throw new Error(`[retention] Refused partition identifier: "${name}" — not a token_transfers/internal_transactions partition`)
   }
   assertSchemaShape(schema)
   return { schema, name } as unknown as SafeIdent
@@ -480,8 +483,13 @@ export function partitionRetentionPlan(
  * measurements behind that. Returns the number of partitions dropped.
  */
 export async function pruneTokenTransfersPartitioned(cutoffBlock: number): Promise<number> {
+  return prunePartitioned('token_transfers', cutoffBlock)
+}
+
+/** The same DROP-PARTITION retention for any partitioned parent. */
+export async function prunePartitioned(parent: PartitionedParent, cutoffBlock: number): Promise<number> {
   const db = getMaintenanceDb()
-  const parts = await listTokenTransferPartitions()
+  const parts = await listPartitions(parent)
   const plan = partitionRetentionPlan(parts, cutoffBlock)
   let dropped = 0
   for (const action of plan) {
@@ -502,7 +510,7 @@ export async function pruneTokenTransfersPartitioned(cutoffBlock: number): Promi
       // Entire partition is older than the cutoff → drop it outright.
       try {
         await db.execute(sql`DROP TABLE IF EXISTS ${identSql(partId)}`)
-        console.log(`[retention] dropped token_transfers partition ${p.name} (blocks ${p.lo}–${p.hi - 1})`)
+        console.log(`[retention] dropped ${parent} partition ${p.name} (blocks ${p.lo}–${p.hi - 1})`)
         dropped++
       } catch (err) {
         console.warn(`[retention] drop partition ${p.name} failed:`, err instanceof Error ? err.message : err)
@@ -519,7 +527,7 @@ export async function pruneTokenTransfersPartitioned(cutoffBlock: number): Promi
         // child spanning all of pre-migration history, so "retain until the DROP"
         // means "retain everything" for the rest of the compact window.
         console.warn(`[retention] ⚠⚠ ${line} — this partition is ${action.widthBlocks} blocks wide, ` +
-          `far wider than the rest of the ladder. Retention is effectively PAUSED for token_transfers ` +
+          `far wider than the rest of the ladder. Retention is effectively PAUSED for ${parent} ` +
           `until the cutoff passes it. If disk is tight, prune inside it manually or re-partition.`)
       } else {
         console.log(`[retention] ${line}`)
@@ -701,7 +709,7 @@ const SIZE_REPORT_TABLES = [
   // addresses is NOT retention-managed and probed at 16.3GB on prod BNB
   // (2026-07-19) — the 3rd-largest object in the DB, previously visible only
   // inside total=. With both named, the line's terms account for the whole DB.
-  'gas_history', 'addresses',
+  'gas_history', 'addresses', 'internal_transactions',
   // A4b: READ-ONLY observability for the immortal backfill tables — the ONLY
   // backfill_ identifiers permitted in this file (a test pins that they never
   // appear in a destructive statement). to_regclass in the size query keeps
@@ -772,6 +780,7 @@ async function reportSizes(): Promise<number> {
     `total=${dbGB.toFixed(2)}GB`,
     `tx=${mb('transactions')}MB`,
     `tt=${mb('token_transfers')}MB`,
+    `itx=${mb('internal_transactions')}MB`,
     `blocks=${mb('blocks')}MB`,
     `logs=${mb('logs')}MB`,
     `tb=${mb('token_balances')}MB`,
@@ -984,6 +993,13 @@ async function runCleanup(override?: { bodyDays?: number; compactDays?: number }
       } catch (err) {
         console.error('[retention] [compact] token_transfers prune failed:', err instanceof Error ? err.message : err)
       }
+      // internal_transactions: always partitioned, so always a partition drop.
+      try {
+        const dropped = await prunePartitioned('internal_transactions', compactCutoffBlock)
+        if (dropped > 0) console.log(`[retention] [compact] internal_transactions: dropped ${dropped} partition(s)`)
+      } catch (err) {
+        console.error('[retention] [compact] internal_transactions prune failed:', err instanceof Error ? err.message : err)
+      }
       // transactions BEFORE blocks (FK transactions.block_number → blocks.number).
       try {
         const n = await deleteByBlockNumber('transactions', compactCutoffBlock)
@@ -1065,6 +1081,8 @@ async function runCleanup(override?: { bodyDays?: number; compactDays?: number }
     await ensureForwardPartitions().catch(err =>
       console.warn('[retention] ensureForwardPartitions warning:', err instanceof Error ? err.message : err))
   }
+  await ensureInternalTxPartitions().catch(err =>
+    console.warn('[retention] ensureInternalTxPartitions warning:', err instanceof Error ? err.message : err))
 
   // Self-heal: tighten the window that actually holds the disk. Decided on the
   // MAX across every sample taken this run — the peak is created mid-run by the

@@ -28,6 +28,17 @@ export const RPC_URLS = (process.env[chain.rpcEnvVar] ?? chain.defaultRpcUrl)
   .map(s => s.trim())
   .filter(Boolean)
 
+/**
+ * Trace endpoint(s) for internal transactions — a SEPARATE list, because none of
+ * the block endpoints can trace (bsc-dataseed returns "not available", publicnode
+ * "does not exist"). Comma-separated like the block list; only the first is used.
+ * Empty when unset: internal transactions then stay off whatever the flag says.
+ */
+export const TRACE_RPC_URLS = (process.env.TRACE_RPC_URL ?? '')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean)
+
 const rpcUrl = RPC_URLS[0] ?? chain.defaultRpcUrl
 const network = Network.from(chain.chainId)
 const provider = new JsonRpcProvider(rpcUrl, network, { staticNetwork: network })
@@ -44,5 +55,6 @@ export function getProvider(): JsonRpcProvider {
  * the caller's wrappers, so they must call this themselves.
  */
 export function safeRpcError(err: unknown): string {
-  return formatRedactedError(err, RPC_URLS)
+  // The trace URL carries its key the same way, so it scrubs against the same set.
+  return formatRedactedError(err, [...RPC_URLS, ...TRACE_RPC_URLS])
 }
