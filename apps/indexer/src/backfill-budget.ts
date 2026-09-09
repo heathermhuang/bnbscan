@@ -14,6 +14,7 @@ export const cfg = {
   pageSleepMs:      indexerConfig.backfill.pageSleepMs,
   maxRowsPerEntity: indexerConfig.backfill.maxRowsPerEntity,  // doc target 10k; start low
   maxPagesPerHour:  indexerConfig.backfill.maxPagesPerHour,
+  maxAttempts:      indexerConfig.backfill.maxAttempts,     // terminal give-up for always-failing rows
   budgetHeadroom:   indexerConfig.backfill.budgetHeadroom,    // BNB shared-bucket check
   maxBackoffMs:     30 * 60 * 1000,
   // R2 — a 'running' row untouched for this long is a crashed worker, reclaimable.

@@ -40,7 +40,24 @@ describe('createMoralisAdapter — failure envelope', () => {
     const r = await createMoralisAdapter(CFG).getAddressNfts('0xa4a-throw')
     expect(r).toEqual({ ok: false, reason: 'upstream_error' })
   })
+
+  it('LOGS the status and endpoint on a non-OK response', async () => {
+    // This path used to be `{ cacheSetNull; return fail(...) }` with no logging
+    // at all, and the backfill worker records only the reason string
+    // 'upstream_error'. So ~2,500 vendor 5xx over 30 days left NOTHING on our
+    // side to grep — diagnosing them needed a DB probe and the vendor console.
+    vi.stubEnv('MORALIS_API_KEY', 'k')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('rate limited', { status: 429 })))
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await createMoralisAdapter(CFG).getAddressHistory('0xa4a-logs')
+    const line = spy.mock.calls.map((c) => String(c[0])).join('\n')
+    expect(line).toContain('[moralis]')
+    expect(line).toContain('wallets/:address/history')
+    expect(line).toContain('429')
+    spy.mockRestore()
+  })
 })
+
 
 describe('createMoralisAdapter — success mapping', () => {
   it('maps a history page to camelCase ProviderTx rows and passes the chain id', async () => {

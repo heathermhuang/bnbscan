@@ -360,6 +360,12 @@ export function readIndexerConfig(
     pageSleepMs: r.int('BACKFILL_PAGE_SLEEP_MS', 2_000, { min: 1 }),
     maxRowsPerEntity: r.int('BACKFILL_MAX_ROWS_PER_ENTITY', 3_000, { min: 1 }),
     maxPagesPerHour: r.int('BACKFILL_MAX_PAGES_PER_HOUR', 300, { min: 1 }),
+    /** Give-up threshold. Without it an entity that ALWAYS fails is re-claimed
+     *  forever: backoff plateaus at 30 min (the exponent is capped at 11) and
+     *  nothing ever marks a row terminal, so it burns provider CU every half
+     *  hour indefinitely. Four such rows were the ENTIRE 5xx population on
+     *  2026-09-09, one at 1,079 attempts. */
+    maxAttempts: r.int('BACKFILL_MAX_ATTEMPTS', 25, { min: 1 }),
     budgetHeadroom: r.ratio('BACKFILL_BUDGET_HEADROOM', 0.4),
     leaseSec: r.int('BACKFILL_LEASE_SEC', 300, { min: 1 }),
     maxTotalGb: r.int('BACKFILL_MAX_TOTAL_GB', 5, { min: 1 }),
