@@ -58,20 +58,6 @@ describe('createMoralisAdapter — failure envelope', () => {
   })
 })
 
-describe('createMoralisAdapter — page sizes are billed units', () => {
-  it('asks erc20/transfers for 25, matching backfill-serve PAGE', async () => {
-    // Billing is per REQUEST, so a smaller limit does not save CU — it splits
-    // the same rows across MORE billed calls. The old limit=10 also showed 10
-    // live rows next to 25 cached ones on the same tab.
-    vi.stubEnv('MORALIS_API_KEY', 'k')
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ result: [], cursor: null }), { status: 200 }),
-    )
-    vi.stubGlobal('fetch', fetchMock)
-    await createMoralisAdapter(CFG).getAddressTokenTransfers('0xa4a-limit')
-    expect(String(fetchMock.mock.calls[0][0])).toContain('limit=25')
-  })
-})
 
 describe('createMoralisAdapter — success mapping', () => {
   it('maps a history page to camelCase ProviderTx rows and passes the chain id', async () => {

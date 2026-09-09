@@ -342,13 +342,29 @@ export async function processOnePage(
   }
 
   if (!res.ok) {
-    // rate_limited is not a failure — release the claim and retry on a later
-    // pass (the fresh stamp also sorts it behind entities not yet throttled).
-    const status: PageStatus = res.reason === 'rate_limited' ? idle : 'error'
+    // OPERATIONAL failures are not this entity's fault, so they must not burn an
+    // attempt: `rate_limited` is our own budget, and `disabled` /
+    // `not_configured` are the kill switch and a missing key. Burning attempts
+    // on those means a prolonged outage marches every entity to the give-up
+    // bound and strands it permanently — and re-enqueue cannot revive it,
+    // because enqueueBackfill is ON CONFLICT DO NOTHING. Release and retry.
+    const operational =
+      res.reason === 'rate_limited' || res.reason === 'disabled' || res.reason === 'not_configured'
+    // Giving up must not destroy pages we already cached. 'error' is not
+    // cacheUsable(), so an exhausted entity with rows would have its cached
+    // tail permanently hidden from the serve path and from outage fallback.
+    // 'capped' means exactly "we stopped fetching; the tail still lives at the
+    // provider" — which is what a given-up entity is — and it is not claimable,
+    // so it also stops the retry. With no rows there is nothing to preserve and
+    // no cursor to resume from, so 'error' (already unclaimable past the bound)
+    // is correct.
+    const exhausted =
+      !operational && entity.attempts + 1 >= cfg.maxAttempts && entity.rows_written > 0
+    const status: PageStatus = operational ? idle : exhausted ? 'capped' : 'error'
     const moved = await fencedUpdate(
       db,
       entity,
-      sql`status=${status}, attempts=attempts+${status === 'error' ? 1 : 0},
+      sql`status=${status}, attempts=attempts+${operational ? 0 : 1},
           last_error=${res.reason}, last_attempt_at=now(), updated_at=now()`,
     )
     return moved ? status : 'lease_lost'

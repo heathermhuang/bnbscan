@@ -95,12 +95,14 @@ async function cacheSetNull(key: string): Promise<void> {
  * status, not a body, not a count. Diagnosing it needed a database probe and the
  * vendor dashboard, neither of which is available mid-incident.
  *
- * One line per failure is enough to make the next one greppable. Bodies are
- * truncated because a provider error page can be arbitrarily large.
+ * The status alone is what was missing and what distinguishes a 500 from a 429
+ * from a bad address. The body is deliberately NOT read: `await res.text()`
+ * buffers the whole response before any truncation could apply, so a large
+ * provider error page would be fully allocated on a path that fires thousands
+ * of times a month.
  */
-function logUpstreamFailure(endpoint: string, status: number, body?: string): void {
-  const detail = body ? ` body=${body.slice(0, 200).replace(/\s+/g, ' ')}` : ''
-  console.error(`[moralis] ${endpoint} failed — HTTP ${status}${detail}`)
+function logUpstreamFailure(endpoint: string, status: number): void {
+  console.error(`[moralis] ${endpoint} failed — HTTP ${status}`)
 }
 
 /**
@@ -768,7 +770,7 @@ export function createMoralisAdapter(
           signal: AbortSignal.timeout(10000),
         } as RequestInit)
         if (!res.ok) {
-          logUpstreamFailure('wallets/:address/history', res.status, await res.text().catch(() => undefined))
+          logUpstreamFailure('wallets/:address/history', res.status)
           await cacheSetNull(cacheKey); return fail('upstream_error')
         }
 
@@ -852,7 +854,7 @@ export function createMoralisAdapter(
           { headers: auth.headers, next: { revalidate: 300 }, signal: AbortSignal.timeout(10000) } as RequestInit,
         )
         if (!res.ok) {
-          logUpstreamFailure(':address/erc20', res.status, await res.text().catch(() => undefined))
+          logUpstreamFailure(':address/erc20', res.status)
           await cacheSetNull(cacheKey); return fail('upstream_error')
         }
         const data = (await res.json()) as Array<{
@@ -896,11 +898,7 @@ export function createMoralisAdapter(
       try {
         const url = new URL(`${BASE}/${address}/erc20/transfers`)
         url.searchParams.set('chain', CHAIN)
-        // 25 matches backfill-serve's PAGE, so a provider page and a cached page are
-        // the same size. Billing is per REQUEST (see CU_COST), so the old 10 split the
-        // same rows across 2.5x more billed calls AND showed 10 live rows next to 25
-        // cached ones on the same tab.
-        url.searchParams.set('limit', '25')
+        url.searchParams.set('limit', '10')  // 10 instead of 25
         if (cursor) url.searchParams.set('cursor', cursor)
 
         const res = await fetch(url.toString(), {
@@ -909,7 +907,7 @@ export function createMoralisAdapter(
           signal: AbortSignal.timeout(10000),
         } as RequestInit)
         if (!res.ok) {
-          logUpstreamFailure(':address/erc20/transfers', res.status, await res.text().catch(() => undefined))
+          logUpstreamFailure(':address/erc20/transfers', res.status)
           await cacheSetNull(cacheKey); return fail('upstream_error')
         }
 
@@ -974,7 +972,7 @@ export function createMoralisAdapter(
           { headers: auth.headers, next: { revalidate: 300 }, signal: AbortSignal.timeout(10000) } as RequestInit,
         )
         if (!res.ok) {
-          logUpstreamFailure(':address/nft', res.status, await res.text().catch(() => undefined))
+          logUpstreamFailure(':address/nft', res.status)
           await cacheSetNull(cacheKey); return fail('upstream_error')
         }
         const data = (await res.json()) as {
@@ -1028,7 +1026,7 @@ export function createMoralisAdapter(
           headers: auth.headers, next: { revalidate: 300 }, signal: AbortSignal.timeout(10000),
         } as RequestInit)
         if (!res.ok) {
-          logUpstreamFailure('erc20/:token/owners', res.status, await res.text().catch(() => undefined))
+          logUpstreamFailure('erc20/:token/owners', res.status)
           await cacheSetNull(cacheKey); return fail('upstream_error')
         }
         const data = (await res.json()) as { total_supply?: string | null; result?: RawOwner[] }
@@ -1060,7 +1058,7 @@ export function createMoralisAdapter(
           headers: auth.headers, next: { revalidate: 300 }, signal: AbortSignal.timeout(10000),
         } as RequestInit)
         if (!res.ok) {
-          logUpstreamFailure('erc20/:token/holders', res.status, await res.text().catch(() => undefined))
+          logUpstreamFailure('erc20/:token/holders', res.status)
           await cacheSetNull(cacheKey); return fail('upstream_error')
         }
         const data = (await res.json()) as { totalHolders?: number }

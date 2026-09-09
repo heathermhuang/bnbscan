@@ -271,6 +271,47 @@ describe('processOnePage — status machine', () => {
     expect(await processOnePage(b.db, provider, entity({ rows_written: 50 }))).toBe('partial')
   })
 
+  it('OPERATIONAL failures never burn an attempt — a kill switch must not strand entities', async () => {
+    // `disabled` and `not_configured` are the kill switch and a missing key:
+    // the entity is fine, the provider is not. Burning attempts on them marches
+    // every entity to the give-up bound during an outage and strands it there
+    // permanently, and enqueueBackfill is ON CONFLICT DO NOTHING so re-enqueue
+    // cannot revive it. They must release the claim exactly like rate_limited.
+    for (const reason of ['disabled', 'not_configured', 'rate_limited'] as const) {
+      const provider = providerOf({ getAddressHistory: async () => ({ ok: false, reason }) })
+      const a = fakeDb()
+      expect(await processOnePage(a.db, provider, entity()), reason).toBe('pending')
+      const b = fakeDb()
+      expect(await processOnePage(b.db, provider, entity({ rows_written: 50 })), reason).toBe('partial')
+    }
+  })
+
+  it('exhausting the bound with rows already cached CAPS rather than errors', async () => {
+    // 'error' is not cacheUsable(), which accepts only complete/capped/partial.
+    // Leaving an exhausted entity there permanently hides pages it had already
+    // cached, from both normal serving and provider-outage fallback. 'capped'
+    // means "we stopped fetching; the tail lives at the provider" — exactly a
+    // given-up entity — and it is not claimable, so retries stop either way.
+    const provider = providerOf({
+      getAddressHistory: async () => ({ ok: false, reason: 'upstream_error' }),
+    })
+    const withRows = fakeDb()
+    expect(
+      await processOnePage(withRows.db, provider, entity({ rows_written: 50, attempts: cfg.maxAttempts - 1 })),
+    ).toBe('capped')
+    // Nothing cached: no tail to preserve and no cursor to resume from, so
+    // 'error' is right — the claim bound already stops it being re-selected.
+    const noRows = fakeDb()
+    expect(
+      await processOnePage(noRows.db, provider, entity({ rows_written: 0, attempts: cfg.maxAttempts - 1 })),
+    ).toBe('error')
+    // One below the bound still errors normally and keeps retrying.
+    const below = fakeDb()
+    expect(
+      await processOnePage(below.db, provider, entity({ rows_written: 50, attempts: cfg.maxAttempts - 2 })),
+    ).toBe('error')
+  })
+
   it('an upstream failure or thrown provider error marks the watermark error', async () => {
     const a = fakeDb()
     expect(
