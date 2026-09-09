@@ -113,7 +113,7 @@ export function buildClaimSql(
       SELECT id FROM backfill_watermarks
       WHERE (status IN ('pending','partial')
          OR (status = 'running' AND last_attempt_at < now() - (${cfg.leaseSec} * INTERVAL '1 second'))
-         OR (status = 'error' AND (last_attempt_at IS NULL OR last_attempt_at < now() - (LEAST(pow(2, LEAST(attempts, 11)), 1800) * INTERVAL '1 second'))))${exclude}
+         OR (status = 'error' AND attempts < ${cfg.maxAttempts} AND (last_attempt_at IS NULL OR last_attempt_at < now() - (LEAST(pow(2, LEAST(attempts, 11)), 1800) * INTERVAL '1 second'))))${exclude}
       ORDER BY (status = 'partial') DESC, last_attempt_at ASC NULLS FIRST, created_at ASC
       LIMIT 1
       FOR UPDATE SKIP LOCKED

@@ -42,8 +42,21 @@ describe('buildClaimSql — the shipped claim statement', () => {
 
   it('errored rows wait out an exponential cooldown capped at 1800s', () => {
     expect(text).toContain(
-      `(status = 'error' AND (last_attempt_at IS NULL OR last_attempt_at < now() - (LEAST(pow(2, LEAST(attempts, 11)), 1800) * INTERVAL '1 second')))`,
+      `(status = 'error' AND attempts < ${cfg.maxAttempts} AND (last_attempt_at IS NULL OR last_attempt_at < now() - (LEAST(pow(2, LEAST(attempts, 11)), 1800) * INTERVAL '1 second')))`,
     )
+  })
+
+  it('gives up past maxAttempts — the cooldown ALONE retries forever', () => {
+    // The exponent is capped at 11 and the interval at 1800s, so backoff
+    // plateaus at 30 minutes and never grows again. With no give-up bound an
+    // entity that ALWAYS fails is re-claimed every half hour indefinitely,
+    // spending provider CU on every attempt. Measured in prod 2026-09-09: four
+    // such rows were the ENTIRE upstream-5xx population, one at 1,079 attempts.
+    expect(text).toContain(`attempts < ${cfg.maxAttempts}`)
+    // It must gate the ERROR arm specifically. Hoisted into the outer WHERE it
+    // would also block pending/partial work, freezing the queue instead.
+    expect(text).toMatch(/status = 'error' AND attempts < \d+ AND \(last_attempt_at/)
+    expect(text).toContain(`status IN ('pending','partial')`)
   })
 
   it('R6: drains partial work before pending, whose NULL last_attempt_at would otherwise preempt', () => {

@@ -40,6 +40,37 @@ describe('createMoralisAdapter — failure envelope', () => {
     const r = await createMoralisAdapter(CFG).getAddressNfts('0xa4a-throw')
     expect(r).toEqual({ ok: false, reason: 'upstream_error' })
   })
+
+  it('LOGS the status and endpoint on a non-OK response', async () => {
+    // This path used to be `{ cacheSetNull; return fail(...) }` with no logging
+    // at all, and the backfill worker records only the reason string
+    // 'upstream_error'. So ~2,500 vendor 5xx over 30 days left NOTHING on our
+    // side to grep — diagnosing them needed a DB probe and the vendor console.
+    vi.stubEnv('MORALIS_API_KEY', 'k')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('rate limited', { status: 429 })))
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await createMoralisAdapter(CFG).getAddressHistory('0xa4a-logs')
+    const line = spy.mock.calls.map((c) => String(c[0])).join('\n')
+    expect(line).toContain('[moralis]')
+    expect(line).toContain('wallets/:address/history')
+    expect(line).toContain('429')
+    spy.mockRestore()
+  })
+})
+
+describe('createMoralisAdapter — page sizes are billed units', () => {
+  it('asks erc20/transfers for 25, matching backfill-serve PAGE', async () => {
+    // Billing is per REQUEST, so a smaller limit does not save CU — it splits
+    // the same rows across MORE billed calls. The old limit=10 also showed 10
+    // live rows next to 25 cached ones on the same tab.
+    vi.stubEnv('MORALIS_API_KEY', 'k')
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ result: [], cursor: null }), { status: 200 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    await createMoralisAdapter(CFG).getAddressTokenTransfers('0xa4a-limit')
+    expect(String(fetchMock.mock.calls[0][0])).toContain('limit=25')
+  })
 })
 
 describe('createMoralisAdapter — success mapping', () => {
