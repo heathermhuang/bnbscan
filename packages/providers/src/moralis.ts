@@ -369,10 +369,69 @@ export function monthlyCuMax(env: Record<string, string | undefined> = process.e
   return strictPositiveInt(env.MORALIS_MONTHLY_CU_MAX, DEFAULT_MONTHLY_CU_MAX, MAX_MONTHLY_CU)
 }
 
-/** Calendar-month key, UTC. Month-stamped so rollover needs no scheduled reset
- *  and a stale key cannot silently carry last month's spend into this month. */
-export function monthKey(now: Date = new Date()): string {
-  return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`
+/**
+ * Day of the month the vendor's CU allowance resets, UTC.
+ *
+ * The plan quota does NOT necessarily roll on the 1st. Verified 2026-09-09 from
+ * the Moralis console: "Renewal Period: 26 Aug 2026, 08:17 - 26 Sep 2026, 08:17"
+ * — a 26th-to-26th cycle. A ledger keyed to the calendar month is then ~5 days
+ * out of phase with the thing it is meant to bound, in BOTH directions:
+ *   - after the vendor resets but before the 1st, the local counter still holds
+ *     the old month and can refuse calls against a quota that is actually fresh;
+ *   - after the 1st, the counter is empty while the real cycle is already days
+ *     consumed, so the ceiling under-protects exactly when it matters.
+ *
+ * Capped at 28 so the day exists in every month, including February.
+ *
+ * ⚠ TWO THINGS THIS DELIBERATELY DOES NOT MODEL. Read before setting the var.
+ *
+ * 1. TIME OF DAY. The cycle rolls at a timestamp (08:17), this key rolls at
+ *    00:00 UTC. The timezone of that 08:17 is NOT established: the vendor's
+ *    usage page renders "your local timezone (UTC+08:00)", which would put the
+ *    real reset at 00:17 UTC — 17 minutes from the day boundary — but the
+ *    billing page carries no such note, and if it is UTC the gap is 8h17m. In
+ *    the gap the local ledger is fresh while the vendor quota is not, so calls
+ *    are admitted against an allowance that may already be spent. The exposure
+ *    is bounded by ceiling headroom (the per-ledger caps are sized to sum
+ *    UNDER plan), not by this function. Settle the timezone before relying on
+ *    the boundary being tight.
+ *
+ * 2. ACTIVATION IS NOT A MIGRATION. Setting this var re-points the key without
+ *    moving the tally. Mid-cycle that is worse than a one-time under-count:
+ *    the key it points AT is the previous calendar month's, which under
+ *    MONTHLY_TTL has usually already expired — so the ledger starts at ZERO and
+ *    hands out a full fresh allowance inside a cycle that is already partly
+ *    spent. SET THIS ONLY JUST AFTER A CYCLE BOUNDARY, where a zeroed ledger is
+ *    the correct state rather than a hole. There is no in-code guard for this;
+ *    the ledger belongs to Redis and this function cannot see it.
+ *
+ * DEFAULT 1 IS EXACTLY THE OLD BEHAVIOUR: with day=1 the guard below can never
+ * fire, so the key stays the plain calendar month until the var is set.
+ */
+const MAX_CYCLE_DAY = 28
+export function cycleStartDay(env: Record<string, string | undefined> = process.env): number {
+  return strictPositiveInt(env.MORALIS_CYCLE_DAY, 1, MAX_CYCLE_DAY)
+}
+
+/** Billing-cycle key, UTC — stamped with the month the CURRENT cycle STARTED.
+ *  Rollover needs no scheduled reset and a stale key cannot silently carry the
+ *  previous cycle's spend into this one.
+ *
+ *  Year/month are stepped by hand rather than via `setUTCMonth(m - 1)`. That
+ *  call normalises an out-of-range day (31 February becomes 3 March), which
+ *  would stamp the wrong cycle. Today it could not actually fire — we only step
+ *  back when `getUTCDate() < day <= 28`, so the day is at most 27 and exists in
+ *  every month, February included — but that safety is a non-obvious
+ *  consequence of MAX_CYCLE_DAY, not of the arithmetic. Raising the cap would
+ *  silently reintroduce the bug. Plain integer stepping cannot have it. */
+export function monthKey(now: Date = new Date(), day: number = cycleStartDay()): string {
+  let y = now.getUTCFullYear()
+  let m = now.getUTCMonth() // 0-11
+  if (now.getUTCDate() < day) {
+    m -= 1
+    if (m < 0) { m = 11; y -= 1 }
+  }
+  return `${y}-${String(m + 1).padStart(2, '0')}`
 }
 const cuKey = (now?: Date): string => `moralis:cu:v1:${monthKey(now)}`
 
