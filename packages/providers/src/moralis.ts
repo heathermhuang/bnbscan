@@ -25,7 +25,9 @@
  *     inside its per-hour cap for 5 days and still ran the account to 100%.
  *   - Strict per-bucket rate limits (history/holders/assets, env-overridable)
  *   - Long cache TTLs (2hr per address) to avoid re-fetches
- *   - Small page sizes (limit=10-25) — enough to show useful data, minimizes CU
+ *   - Small page sizes (limit=10-25). NOTE: billing is per REQUEST, so this does
+ *     NOT minimize CU — it splits the same rows across more billed calls. Kept
+ *     for latency/payload reasons only; see the CU_COST block.
  *   - exclude_spam=true on token endpoints to skip noise
  *   - Only fetch for the active tab, never prefetch other tabs
  *   - Bot detection (explorer shim) skips the provider entirely for crawlers
@@ -190,9 +192,9 @@ export function normalizeLogIndex(raw: string | number | null | undefined): stri
 /**
  * Rate limiter — PER-FEATURE budgets so a spike/abuse in one feature can't starve the others.
  * Buckets:
- *   - history : getAddressHistory                                        (~25 CU/call)
- *   - holders : getTokenHolders + getTokenHolderCount                    (~50 CU/call, 2 calls/token)
- *   - assets  : getAddressTokenBalances + getAddressNfts + getAddressTokenTransfers (~25 CU/call)
+ *   - history : getAddressHistory                                        (~148 CU/call)
+ *   - holders : getTokenHolders + getTokenHolderCount                    (~51 CU/call, 2 calls/token)
+ *   - assets  : getAddressTokenBalances (100) + getAddressNfts (50) + getAddressTokenTransfers (50)
  * Caps are env-overridable; defaults sum to 1500/hr + 10000/day — the prior single-bucket total —
  * so total Moralis exposure is UNCHANGED (this only partitions it). A saturated bucket fails with
  * reason 'rate_limited' → the caller falls back to its local view, and the OTHER buckets keep serving.
@@ -261,27 +263,42 @@ function bucketKeys(bucket: MoralisBucket): { hourly: string; daily: string } {
 }
 
 /**
- * ⚠ UNVERIFIED CU COSTS — read this before trusting any number below.
+ * MEASURED CU COSTS — settled 2026-09-09 from admin.moralis.com/usage.
  *
- * These were prose comments ("Cost: ~25 CU") that had never been checked against
- * Moralis's published rate table. They are now DATA, debited from a real budget,
- * so a wrong number produces a wrong ceiling rather than a wrong sentence. Two
- * things are still unknown and BOTH need Moralis console access to settle:
- *   1. the true per-endpoint CU rate, and
- *   2. whether these endpoints bill per REQUEST or per RESULT. If per result,
- *      `limit` does not reduce spend for a fixed volume of data, and the small
- *      page sizes below buy nothing — they just split the same bill into more
- *      requests. A4b backfill pulled 290,067 rows in 6 days; under per-result
- *      billing that row count, not the 16,077 request count, is the bill.
+ * These began as prose comments ("Cost: ~25 CU") that had never been checked
+ * against Moralis's rate table. They became DATA debited from a real budget,
+ * and the guessed numbers were wrong by up to 6x, which is why a "1,000,000 CU"
+ * ceiling was really a ~6,000,000 one and the account reached 75% of plan with
+ * overages billing while the meter read 16%.
  *
- * Every entry is env-overridable so the real rates can be applied WITHOUT a
+ * Derived as 30d CU / 30d requests, per endpoint, over a 4,000,000 CU window:
+ *
+ *   endpoint                     CU/call   was
+ *   /wallets/:address/history      ~148     25   <- 85% of the entire bill
+ *   /:address/erc20/transfers       ~50     25
+ *   /:address/erc20                 100     25
+ *   /:address/nft                    50     25
+ *   /erc20/:token/owners            ~51     50   (already correct)
+ *   /erc20/:token/holders           ~51     50   (already correct)
+ *
+ * Billing is PER REQUEST, not per result: the ratios come out clean at fixed
+ * page sizes. That settles the open question this comment used to pose, and it
+ * inverts one of the header's strategy bullets — small `limit` values do NOT
+ * reduce spend. For a fixed volume of data a smaller page splits the same rows
+ * across MORE billed requests, so `limit=10` on erc20/transfers costs 2.5x what
+ * `limit=25` would. Raising those limits is a real saving and a separate change.
+ *
+ * The counters these feed are NOT retroactively repriced: usage accrued before
+ * this correction sits in Redis at the old rate for the rest of that month.
+ *
+ * Every entry stays env-overridable so a rate change can be applied WITHOUT a
  * deploy, the same no-deploy property that let the backfill flag flip.
  */
 export const CU_COST = {
-  addressHistory:   cuCostEnv('MORALIS_CU_ADDRESS_HISTORY', 25),
-  addressBalances:  cuCostEnv('MORALIS_CU_ADDRESS_BALANCES', 25),
-  addressTransfers: cuCostEnv('MORALIS_CU_ADDRESS_TRANSFERS', 25),
-  addressNfts:      cuCostEnv('MORALIS_CU_ADDRESS_NFTS', 25),
+  addressHistory:   cuCostEnv('MORALIS_CU_ADDRESS_HISTORY', 150),
+  addressBalances:  cuCostEnv('MORALIS_CU_ADDRESS_BALANCES', 100),
+  addressTransfers: cuCostEnv('MORALIS_CU_ADDRESS_TRANSFERS', 50),
+  addressNfts:      cuCostEnv('MORALIS_CU_ADDRESS_NFTS', 50),
   tokenHolders:     cuCostEnv('MORALIS_CU_TOKEN_HOLDERS', 50),
   tokenHolderCount: cuCostEnv('MORALIS_CU_TOKEN_HOLDER_COUNT', 50),
 } as const
@@ -708,7 +725,8 @@ export function createMoralisAdapter(
 
     /**
      * Wallet transaction history. Also returns total tx count from the response
-     * so no separate stats call is needed. Cost: ~25 CU.
+     * so no separate stats call is needed. Cost: ~148 CU — the single most
+     * expensive call in the system and ~85% of the Moralis bill.
      */
     async getAddressHistory(address: string, cursor?: string): Promise<ProviderResult<AddressHistoryPage>> {
       const cacheKey = `${NS}:history:${address}:${cursor ?? ''}`
