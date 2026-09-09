@@ -219,14 +219,28 @@ describe.skipIf(!PG_URL)('backfill claim — real Postgres', () => {
     // The fresh pending row is claimable — the poisoned row must not throw.
     const first = await claimNextEntity(db)
     expect(first?.entity_id).toBe('0x' + 'f'.repeat(40))
-    // Inside the capped 1800s cooldown: not claimable. Past it: claimable.
     expect(await claimNextEntity(db)).toBeNull()
+    // Past the capped cooldown it STILL must not claim — 2000 attempts is far
+    // beyond the give-up bound. This assertion used to expect the row BACK,
+    // which is what a permanent retry loop looks like: four such rows were the
+    // entire upstream-5xx population in prod on 2026-09-09, one at 1,079
+    // attempts. The overflow cap (LEAST(attempts, 11)) is still what keeps this
+    // SELECT from raising; the bound is what keeps the row from retrying forever.
     await raw.unsafe(`
       UPDATE backfill_watermarks
       SET last_attempt_at = now() - interval '1801 seconds'
       WHERE entity_id = '0x${'e'.repeat(40)}'`)
-    const second = await claimNextEntity(db)
-    expect(second?.entity_id).toBe('0x' + 'e'.repeat(40))
+    expect(await claimNextEntity(db)).toBeNull()
+  })
+
+  it('gives up AT maxAttempts, but a row one below it still retries', async () => {
+    // The negative case alone would pass if the bound were off-by-one in the
+    // blocking direction, or if it silently froze every error row.
+    await seed({ entity: '0x' + '1'.repeat(40), status: 'error', attempts: cfg.maxAttempts, attemptAgoSec: 4000 })
+    await seed({ entity: '0x' + '2'.repeat(40), status: 'error', attempts: cfg.maxAttempts - 1, attemptAgoSec: 4000 })
+    const claimed = await claimNextEntity(db)
+    expect(claimed?.entity_id).toBe('0x' + '2'.repeat(40)) // below the bound: still retries
+    expect(await claimNextEntity(db)).toBeNull()            // at the bound: given up
   })
 
   it('releaseClaim hands a running row back to pending/partial, and only a running row', async () => {
