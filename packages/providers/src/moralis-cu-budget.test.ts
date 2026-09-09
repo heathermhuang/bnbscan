@@ -131,7 +131,7 @@ describe('CU cost overrides are validated, not merely parsed', () => {
     // it would have passed with this bug present.
     vi.stubEnv('MORALIS_CU_ADDRESS_HISTORY', '-25')
     const { CU_COST } = await freshModule()
-    expect(CU_COST.addressHistory).toBe(25)
+    expect(CU_COST.addressHistory).toBe(150)
   })
 
   it('ignores zero, non-numeric, and absurdly large costs', async () => {
@@ -139,9 +139,9 @@ describe('CU cost overrides are validated, not merely parsed', () => {
     vi.stubEnv('MORALIS_CU_TOKEN_HOLDERS', 'free')
     vi.stubEnv('MORALIS_CU_ADDRESS_NFTS', '99999999')
     const { CU_COST } = await freshModule()
-    expect(CU_COST.addressHistory).toBe(25)
+    expect(CU_COST.addressHistory).toBe(150)
     expect(CU_COST.tokenHolders).toBe(50)
-    expect(CU_COST.addressNfts).toBe(25)
+    expect(CU_COST.addressNfts).toBe(50)
   })
 
   it('honours a plausible override', async () => {
