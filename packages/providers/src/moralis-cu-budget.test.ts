@@ -100,6 +100,44 @@ describe('strictPositiveInt', () => {
   })
 })
 
+describe('monthKey — billing-cycle stamping', () => {
+  it('stamps the month the CURRENT cycle STARTED, not the calendar month', async () => {
+    const { monthKey } = await freshModule()
+    // Verified from the Moralis console 2026-09-09: the plan renews on the 26th,
+    // so 9 Sep belongs to the cycle that opened on 26 Aug.
+    expect(monthKey(new Date('2026-09-09T07:00:00Z'), 26)).toBe('2026-08')
+    expect(monthKey(new Date('2026-09-25T23:59:59Z'), 26)).toBe('2026-08')
+    expect(monthKey(new Date('2026-09-26T00:00:00Z'), 26)).toBe('2026-09')
+  })
+
+  it('steps back across a year boundary without landing in month -1', async () => {
+    const { monthKey } = await freshModule()
+    expect(monthKey(new Date('2027-01-05T00:00:00Z'), 26)).toBe('2026-12')
+    expect(monthKey(new Date('2027-01-26T00:00:00Z'), 26)).toBe('2027-01')
+  })
+
+  it('never lands on a day that does not exist in the target month', async () => {
+    const { monthKey } = await freshModule()
+    // setUTCMonth(m-1) normalises 31 Feb to 3 Mar. Integer stepping cannot.
+    expect(monthKey(new Date('2026-03-27T12:00:00Z'), 28)).toBe('2026-02')
+    expect(monthKey(new Date('2026-03-31T12:00:00Z'), 28)).toBe('2026-03')
+  })
+
+  it('defaults to day 1, which is byte-identical to calendar-month stamping', async () => {
+    const { monthKey, cycleStartDay } = await freshModule()
+    expect(cycleStartDay({})).toBe(1)
+    expect(monthKey(new Date('2026-09-09T07:00:00Z'), 1)).toBe('2026-09')
+  })
+
+  it('rejects a cycle day that does not exist in every month, and other junk', async () => {
+    const { cycleStartDay } = await freshModule()
+    for (const bad of ['29', '31', '0', '-1', 'last', '', '  ', '2.5']) {
+      expect(cycleStartDay({ MORALIS_CYCLE_DAY: bad }), bad).toBe(1)
+    }
+    expect(cycleStartDay({ MORALIS_CYCLE_DAY: '26' })).toBe(26)
+  })
+})
+
 describe('monthKey — calendar-month stamping', () => {
   it('uses UTC and rolls over exactly at the month boundary', async () => {
     const { monthKey } = await freshModule()
